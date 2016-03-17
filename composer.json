@@ -1,0 +1,18 @@
+{   
+    "name": "craigify/indicium",
+    "type": "library",
+    "description": "Database library and ORM",
+    "license": "Apache-2.0",
+    "authors": [
+        {   
+            "name": "Craig McDaniel",
+            "email": "craig@craigify.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Indicium\\": "/src"
+        }
+    }
+}
+
