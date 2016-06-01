@@ -5,6 +5,8 @@
 
 namespace Indicium\Connections;
 
+use Indicium\Exceptions\ConnectionException;
+
 abstract class Connection
 {
    protected $server;
@@ -14,7 +16,15 @@ abstract class Connection
    protected $dbhandle;
    protected $dbresult;
    protected $isconnected;
+   protected $logger;
 
+   
+   // Inject a PSR-3 compatible logger.
+   // @param object $logger Logger object
+   public function setLogger()
+   {
+      $this->logger = $logger;
+   }
 
    // Make a connnection to the remote SQL server and return TRUE/FALSE.  This should set the connection
    // handler with this->setHandler().  The constructor should call this method automatically.

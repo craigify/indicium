@@ -22,13 +22,14 @@
 // Working with data:
 // ----------------------------------------------------------------------------------------------------------------------------------------
 // getFields()                Return array of key=>value pairs of object's data.
+// getRelations()             Return an array of any related loaded ORM objects in the data set.
 // getDbFields()              Return array of key=>value pairs with database column names instead of object properties.
 // setFields()                Use array of key=>value pairs to set object's data.
 // updateFields()             Update fields with key=>value pairs.  Only update fields present in your array.
 // ORM->fieldname             Access any field name with normal object notation.  e.g. ORM->name = "Craig"
 // setField(value)            ORM->setName("Craig") sets ORM->name = "Craig"
 // getField()                 ORM->getName returns value of ORM->name, which would be "Craig"
-// isDirty()                  Return TRUE if object data is "dirty" or not synched with the db.  save() will solve this.
+// isDirty()                  Return true if object data is "dirty" or not synched with the db.  save() will solve this.
 //
 // Other methods:
 // ----------------------------------------------------------------------------------------------------------------------------------------
@@ -60,6 +61,9 @@
 
 namespace Indicium\ORM;
 
+use Indicium\Exceptions\ORMException;
+use Indicium\Exceptions\InvalidStateException;
+
 // ORM relation types
 define("ORM_HAS_ONE",        1001);    // 1 to 1 mapping with INNER JOIN
 define("ORM_MIGHT_HAVE_ONE", 1002);    // 1 to 1 mapping with LEFT JOIN
@@ -73,7 +77,6 @@ define("ORM_NEW_OBJECT",     2000);
 define("ORM_THIS_OBJECT",    2002);
 define("ORM_ARRAY",          2004);
 
-
 abstract class ORM
 {
    // All ORM objects store their data in this internal array.  This is done to stop too much object pollution with ORM stuff.
@@ -81,50 +84,37 @@ abstract class ORM
 
 
    // Constructor.
-   public function __construct($loadRelations = TRUE)
+   public function __construct($loadRelations = true)
    {
       $this->orm['data'] = array();
       $this->orm['loadRelations'] = $loadRelations;
-      $this->orm['namespace'] = "\\"; // global namespace by default
       $this->orm['tableName'] = $this->getShortClassName(); // get_class($this);
       $this->orm['tableNameDb'] = $this->getShortClassName(); // get_class($this);
       $this->orm['primaryKey'] = NULL;
-      $this->orm['unique'] = FALSE;
+      $this->orm['unique'] = false;
       $this->orm['fieldMap'] = array();
       $this->orm['objectFieldMap'] = array();
       $this->orm['conditions'] = array(); // conditions used every time.
       $this->orm['lastConditions'] = array(); // last conditions array for previous query.
       $this->orm['relations'] = array();
       $this->orm['queryQueue'] = array();
-      $this->orm['dbSync'] = FALSE;
-      $this->orm['isDirty'] = FALSE;      
-      $this->orm['cascadeSave'] = FALSE;
-      $this->orm['cascadeDelete'] = FALSE;
+      $this->orm['dbSync'] = false;
+      $this->orm['isDirty'] = false;
+      $this->orm['enableTransactions'] = true;
+      $this->orm['cascadeSave'] = false;
+      $this->orm['cascadeDelete'] = false;
       $this->orm['reader'] = NULL;
       $this->orm['writer'] = NULL;
    }
    
    
-   // Specify which namespace your classes are in.  Do this in the constructor of your concrete class
-   // that inherits ORM.  This way when you call setRelation() and specify a related ORM class, we know
-   // where to look.  Alternatively, you can speficy the full class name with namespace.
-   // @param string $ns The namespace to find related ORM classes   
-   public function setNamespace($ns)
+   // How to check if an objet is an ORM object:
+   // method_exists($obj, "isORM") === true
+   public function isORM()
    {
-      $this->orm['namespace'] = $ns;
+      return true;
    }
    
-   
-   // Simultaneously set a reference to a QueryBuilder object internally for read and write operations.
-   // The ORM layer needs a QueryBuilder object to perform various read and write DB operations, and
-   // the following few methods provide functionality to set and retrieve references to those objects.
-   // @param object $queryBuilder An instantiated and connected QueryBuilder object
-   public function setQueryBuilder($queryBuilder)
-   {
-      $this->setQueryBuilderReader($queryBuilder);
-      $this->setQueryBuilderWriter($queryBuilder);      
-   }
-
 
    // Tell us what QueryBuilder object to use for read operations.
    // @param object $queryBuilder An instantiated and connected QueryBuilder object
@@ -142,8 +132,35 @@ abstract class ORM
    }
    
    
-   // Retrieve a reference to QueryBuilder object for read operations.  This is used internally, but you
-   // can use it too for whatever reason you might need.
+   // Simultaneously set a reference to a QueryBuilder object internally for read and write operations.
+   // The ORM layer needs a QueryBuilder object to perform various read and write DB operations, and
+   // the following few methods provide functionality to set and retrieve references to those objects.
+   // @param object $queryBuilder An instantiated and connected QueryBuilder object
+   public function setQueryBuilder($queryBuilder)
+   {
+      $this->setQueryBuilderReader($queryBuilder);
+      $this->setQueryBuilderWriter($queryBuilder);      
+   }
+   
+   
+   // Alias to set reader
+   // @param object $queryBuilder An instantiated and connected QueryBuilder object
+   public function setReader($queryBuilder)
+   {
+      $this->setQueryBuilderReader($queryBuilder);
+   }
+   
+   
+   // Alias to set writer
+   // @param object $queryBuilder An instantiated and connected QueryBuilder object
+   public function setWriter($queryBuilder)
+   {
+      $this->setQueryBuilderWriter($queryBuilder);
+   }
+   
+   
+   // Retrieve a reference to QueryBuilder object for read operations.  This is used internally,
+   // but you can use it too for whatever reason you might need.
    // @param object An instantiated and connected QueryBuilder object
    public function getReader()
    {
@@ -151,8 +168,8 @@ abstract class ORM
    }
 
 
-   // Retrieve a reference to QueryBuilder object for write operations.  This is used internally, but you
-   // can use it too for whatever reason you might need.
+   // Retrieve a reference to QueryBuilder object for write operations.  This is used internally,
+   // but you can use it too for whatever reason you might need.
    // @param object An instantiated and connected QueryBuilder object
    public function getWriter()
    {
@@ -160,13 +177,58 @@ abstract class ORM
    }
 
 
-   //////////////////////////////////////////////////////////////////////////////////////////
-   // get, set and load methods.  Get data in and out of the current object.               //
-   //////////////////////////////////////////////////////////////////////////////////////////
+   // Inject a PSR-3 compatible logger.
+   // @param object $logger Logger object
+   public function setLogger($logger)
+   {
+      $this->orm['logger'] = $logger;
+   }
+   
+   
+   // @return object Reference to PSR-3 compatible logger object.
+   public function getLogger()
+   {
+      return $this->orm['logger'];
+   }
+
+   
+   // This tells ORM to use transactions where necessary.  
+   public function enableTransactions()
+   {
+      $this->orm['enableTransactions'] = true;
+   }
+
+   
+   // This tells ORM not to use transactions.  It would be up to you to begin and end a transaction
+   // manually when performing database syncing operations.
+   public function disableTransactions()
+   {
+      $this->orm['enableTransactions'] = false;
+   }
+
+   
+   // Enable automatic cascade save.
+   protected function enableCascadeSave()
+   {
+      $this->orm['cascadeSave'] = true;
+   }
+
+   
+   // Disable automatic cascade save.
+   protected function disableCascadeSave()
+   {
+      $this->orm['cascadeSave'] = false;
+   }
+
+   
+   
+   //////////////////////////////////////////////////////////////////////////////////////////////////
+   // get, set and load methods.  Get data in and out of the current object.               
+   //////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-   // Intercept all property sets and direct them to the set() method.  We're able to determine the data
-   // state of the ORM object this way, either dirty or not.
+   // Intercept all property sets and direct them to the set() method.  We're able to determine the
+   // data state of the ORM object this way, either dirty or not.
    public function __set($objField, $value)
    {
       $this->set($objField, $value);
@@ -212,92 +274,146 @@ abstract class ORM
    // them in an internal data array ensures that they never get set directly, so our magic methods
    // will always work.
    //
+   // @return mixed Returns your value back to you
    public function set($objField, $objValue)
    {      
       foreach ($this->orm['objectFieldMap'] as $key => $value)
       {
          if (strcasecmp($objField, $key) == 0)
          {
-            if (method_exists($this, "onBeforeSet"))
-            {
-               $this->onBeforeSet($objField, $objValue);
-            }
-
-            /* We did a case-insensitive match, but actualy set the variable in the object with the correct case! */
-            $this->orm['data'][$key] = $objValue;
-            $this->orm['isDirty'] = true;
-	    
-            if (method_exists($this, "onAfterSet"))
-            {
-               $this->onAfterSet($objField, $objValue);
-            }
-	    
-         return $objValue;
+            $this->ormSet($objField, $objValue);
+            return $objValue;
          }	 
       }
 
-      // If we get here, we're setting a value that isn't in our object map.  The isDirty flag won't get set.
+      // If we get here, we're setting a value that isn't in our object map.  The isDirty flag won't
+      // get set and no events will be triggered.
+      //
+      // We need this to bere here because we set related objects in the data array, and they aren't
+      // part of the object field map.  This could be changed later and store related objects
+      // somewhere else internally.
       $this->orm['data'][$objField] = $objValue;
 
    return $objValue;
    }
-
-
-
-  /* Set object fields by passing an array of key => value pairs.  Keys will be compared against the field map
-   * in a CASE INSENSITIVE manner, just like set().
-   */
-
-   function setFields($fields)
+   
+   
+   // Set data on the ORM object as well as data on any related orm objects.  The fields data can be a simple
+   // object with properties, or an assoc array of key=>value pairs.
+   //
+   // Related objects should be represented by their short class name, and contain either an array of objects
+   // (or assoc arrays) with keys for has many relationships, or just a singular object or assoc array with keys
+   // for a 1=1 relationship.
+   //
+   // @throws InvalidStateException if the input field data contains related object data that does not match the relation definitions
+   // @throws ORMException for all other errors
+   //
+   // @param mixed $fields Field data to set
+   public function setFields($fields)
    {
-      $fields = array_change_key_case($fields, CASE_LOWER);
-      $map = array_change_key_case($this->orm['objectFieldMap'], CASE_LOWER);
-
-      foreach ($fields as $key => $value)
+      if ((!is_array($fields) && !$this->isAssoc($fields)) && !is_object($fields))
       {
-         if (array_key_exists($key, $map))
-         {
-            $this->set($key, $value);
-         }
+         throw new ORMException("fields is supposed to be either an associative array of key=value pairs, or an object with properties.");
+      }      
+
+      if (is_object($fields))
+      {
+         $fields = (array)$fields;
       }
+      
+      foreach ($fields as $fieldKey => $fieldValue)
+      {
+         // If key is a field name, set it on $this. Easy.
+         if (array_key_exists($fieldKey, $this->orm['objectFieldMap']))
+         {
+            $this->ormSet($fieldKey, $fieldValue);
+            continue;
+         }
+         
+         // If key is a related object, we first need to find the matching related object by iterating
+         // through our relations array.
+         foreach ($this->orm['relations'] as $longClassName => $relation)
+         {
+            // Check for some consistency in the input fields and relations defintion. The related
+            // object in the fields (input) data must represent the relation type.  So if we're
+            // Company, and we have many Employee objects, we expect $key to be an numeric array here,
+            // presumably of Employee object data.  If we just have one Employee object and not an
+            // array, then our input/fields data does not match our ORM definition.  This would be
+            // an irreconcilable mismatch and we would wind up with an invalid object state.
+            
+            // If the input is a numeric array, we consider that to be an array of objects, or it
+            // could be an array of assoc arrays.  Regardless, this signifies to us that the input
+            // field represents a 1 to many relationship.
+            if (is_array($fieldValue) && !$this->ormIsAssoc($fieldValue)
+               && $relation['type'] != ORM_HAS_MANY
+               && $relation['type'] != ORM_MANY_TO_MANY)
+            {
+               throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition");
+            }
+            
+            // If the input field value is an associtive array (not numeric), is the same as an object,
+            // and also represents 1=1 relationship.
+            if (is_array($fieldValue) && $this->ormIsAssoc($fieldValue)
+                && $relation['type'] != ORM_HAS_ONE
+                && $relation['type'] != ORM_MIGHT_HAVE_ONE
+                && $relation['type'] != ORM_BELONGS_TO)
+            {
+               throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition");               
+            }
+
+            // If the input field value is an oject, it means we're talking about a 1=1 relationship.
+            if (is_object($fieldValue)
+                && $relation['type'] != ORM_HAS_ONE
+                && $relation['type'] != ORM_MIGHT_HAVE_ONE
+                && $relation['type'] != ORM_BELONGS_TO)
+            {
+               throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition");
+            }
+            
+            $shortClassName = $this->getShortClassName($longClassName);
+            
+            if ($fieldKey == $longClassName || $fieldKey == $shortClassName)
+            {
+               // fieldValue will now represent another level of depth at this point.  It should be
+               // one of the following:
+               //  * An assoc array or object (has one, belongs to one relationsip)
+               //  * An array of assoc arrays, or array of objects (has many relationship)               
+               $this->ormSetRelationFields($fieldValue, $longClassName, $shortClassName, $relation['key']);                  
+               break;
+            }
+         }         
+      }      
    }
 
-
-
-  /* Return the value of an object variable.
-   *
-   * Return NULL if not defined.
-   */
-
+   
+   
+   // Return the value of an object variable, or null if not defined.
+   // @param string $objField The field name/key/variable
+   // @return mixed
    public function get($objField)
    {      
       if (isset($this->orm['data'][$objField]))
       {
-	 return $this->orm['data'][$objField];
+         return $this->orm['data'][$objField];
       }
       else
       {
-	 return null;
+         return null;
       }
    }
 
 
-
-  /* Get the current fields and their values from the current object, returning them as a key => value array.
-   * Any undefined field names get assigned NULL in the array automatically.
-   */
-
+   // Get the current object's mapped field data as an array of key=value pairs
+   // @return array
    public function getFields()
    {
+      $fields = array();
+
       foreach ($this->orm['objectFieldMap'] as $key => $value)
       {
          if (isset($this->orm['data'][$key]))
          {
             $fields[$key] = $this->orm['data'][$key];
-         }
-         else
-         {
-            $fields[$key] = NULL;
          }
       }
 
@@ -305,57 +421,63 @@ abstract class ORM
    }
 
 
-  /* Like getFields() except field names are the database column names instead of the object properties.
-   */
+   // Like getFields() except the field names returned are the database column names instead of the
+   // object properties.
+   // @return array
    public function getDbFields()
    {
+      $fields = array();
+      
       foreach ($this->orm['fieldMap'] as $dbField => $objField)
       {         
          if (isset($this->$objField))
          {
-            $fields[$dbField] = $this->$objField;
-         }
-         else
-         {
-            $fields[$dbField] = NULL;
+            $fields[$dbField] = $this->orm['data'][$objField];
          }
       }
       
       return $fields;
    }
 
-
-  /* Return ALL fields and values from the object, except for private properties.
-   */
-
-   public function getAllFields()
+   
+   // Return an array of related objects in the dataset.  This returns only loaded objects if they
+   // are related in the database, not any schema information or definitions. If no related objects
+   // are present in memory, then you'll get an empty array.
+   // @return array of ORM objects
+   public function getRelations()
    {
-      $result = array_merge($this->getFields(), get_object_vars($this));
-      unset($result['orm']);
-
-   return $result;
+      $relations = array();
+      
+      foreach ($this->orm['relations'] as $className => $someData)
+      {
+         $shortName = $this->getShortClassName($className);
+         
+         if (isset($this->{$shortName}))
+         {
+            $relations[$shortName] = $this->{$shortName};
+         }
+      }
+      
+      return $relations;
    }
 
-
-
-  /* Load data from the database and populate result into current instance of object.  Since an object
-   * represents a single tuple, multiple rows (tuples) in the resultset of the query would result
-   * in an error.
-   *
-   * Return TRUE on successful load.
-   * Return FALSE if no record found, or if error.
-   *
-   */
-
+   
+   // Load data from the database and populate result into current instance of object.  Since an
+   // object represents a single tuple, multiple rows (tuples) in the resultset of the query would
+   // result in an error.
+   //
+   // @throws ORMException on error.
+   // @param mixed $primaryKeyValue The primary key value representing the record to load
+   // @return ORM Returns true when loaded.
    public function load($primaryKeyValue)
    {
       if (empty($this->orm['primaryKey']))
       {
-         //error(E_WARNING, "No primary key defined, therefore I cannot load a tuple.");
-         return FALSE;
+         throw new ORMException("No primary key defined, therefore I cannot load anything.");
       }
 
-      $conditions = $this->ormConditions(array("{$this->orm['primaryKey']} = {$primaryKeyValue}"));
+      $primaryKeyField = $this->ormGetPrimaryKeyField();
+      $conditions = $this->ormConditions(array("{$primaryKeyField} = {$primaryKeyValue}"));
       $ret = $this->ormLoad(ORM_THIS_OBJECT, 1, $conditions);
 
    return $ret;
@@ -363,17 +485,14 @@ abstract class ORM
 
 
 
-  /* Load a tuple from the database, using a UNIQUE value for reference other than the primary key.
-   *
-   * loadBy("identifier", "uniquevalue") will work just like load()
-   * Also magic method loadByN("value") applies.
-   *
-   * If the database operation returns multiple rows (tuples), we would also return an error here.
-   *
-   * Return TRUE on successful load, or FALSE if no record found, or if error.
-   *
-   */
-
+   // Load a tuple from the database, using a UNIQUE value for reference other than the primary key.
+   //
+   // loadBy("identifier", "uniquevalue") will work just like load()
+   // Also magic method loadByN("value") applies.
+   //
+   // @throws ORMException on error.
+   // @param string $objField The name of the field to use as a condition for loading
+   // @param mixed $objValue The value of the field to use as a condition for loading
    public function loadBy($objField, $objValue)
    {
       /* Generate conditions array */
@@ -387,8 +506,7 @@ abstract class ORM
 
       if (empty($conditions))
       {
-         //error(E_NOTICE, "'$objField' does not map to any database field in ORM class " . get_class($this));
-         return FALSE;
+         throw new ORMException("'{$objField}' does not map to any database field in ORM class " . get_class($this));
       }
 
       $ret = $this->ormLoad(ORM_THIS_OBJECT, 1, $this->ormConditions($conditions));
@@ -397,78 +515,132 @@ abstract class ORM
    }
 
 
-
-  /* Set field names in the object and automatically update the database.  Like setFields(), keys are case insensitive.
-   *
-   * This method only works if you have a valid tuple in the database.  In other words, you can't update a record
-   * that doesn't exist yet!
-   */
-
-   function updateFields($fields)
-   {
-      foreach ($fields as $field => $value)
-      {
-         $this->set($field, $value);
-      }
-
-      if ($this->orm['dbSync'] == TRUE)
-      {
-         $this->save();
-         return TRUE;
-      }
-      else
-      {
-         //error(E_NOTICE, "updateFields() cannot update the database because I am not synched with a database tuple yet!");
-         return FALSE;
-      }
-   }
-
-
-
-  /* Save (synchronize) data in object with database.  Detect if we need to INSERT or UPDATE automatically.
-   *
-   * Return TRUE/FALSE on success/fail.
-   */
-
+   // Save (synchronize) data in object with database only if the ORM object has the dirty flag set,
+   // indicating that data has changed internally. Automatically detect if we need to perform a SQL
+   // INSERT or UPDATE operation.
+   //
+   // If the cascade flag is set, then the save operation will also be performed on related objects
+   // along with this one.
+   //
+   // @throws InvalidStateException for any internal data state problems
+   // @throws ORMException for all other errors
    public function save()
    {
-      if ($this->orm['dbSync'] == TRUE)
+      if ($this->orm['isDirty'] == false)
       {
-         return $this->ormUpdate();
+         return;
+      }
+      
+      if ($this->orm['dbSync'] == true)
+      {
+         $this->ormUpdate();
       }
       else
       {
-         return $this->ormSave();
+         $this->ormSave();
       }
    }
-
-
-  /* Delete a tuple/row from the database.  Speficy primary key as $id.  If no key provided, assume the current
-   * object is synched/loaded and you want to remove it from the database forever.
-   *
-   */
-
-   public function delete($id, $conditions=array())
+   
+   
+   // Manually perform a cascading save operation regardless of the cascade save option defined on
+   // the ORM object.
+   // @throws InvalidStateException for any internal data state problems
+   // @throws ORMException for all other errors
+   public function cascadeSave()
    {
-      if (empty($id))
+      $this->save();
+      $this->ormCascadeSave();
+   }
+
+   
+   // *** NOTE: This is just a fancy way to make a SQL UPDATE statement ***
+   //
+   // Perform a SQL UPDATE database operation for fields specified in $fieldsToUpdate and conditions
+   // specified in the $conditions array.  Any field names in $fieldsToUpdate will be translated from
+   // their object property into their equivalent database field name in the SQL statement.
+   //
+   // This allows you to perform a quick SQL UPDATE statement based off of the object field map.  No
+   // before and after events will be triggered, and no object syncing of any kind will happen.  
+   //
+   // @throws ORMException on error
+   // @param mixed $ormFields Array or object of key=>value pairs to update.  Theese are ORM object properties, not DB field names.
+   // @param array $conditions Standard conditions array
+   // @param string $limit LIMIT clause, e.g. "LIMIT 1"
+   // @return mixed Returns number of rows updated, if any.
+   public function quickUpdate($ormFields, $conditions, $limit=null)
+   {
+      if ((!is_array($ormFields) && !$this->isAssoc($ormFields)) || !is_object($ormFields))
       {
-         $id = $this->ormGetPrimaryKeyValue();
+         throw new ORMException("ormFields is supposed to be either an associative array of key=value pairs, or an object with properties.");
+      }      
+      
+      if (empty($ormFields))
+      {
+         throw new ORMException("ormFields cannot be empty.");
+      }
+      
+      if (is_object($ormFields))
+      {
+         $ormFields = (array)$ormFields;
+      }
+      
+      foreach ($this->orm['insertUpdateMap'] as $objVar => $dbVar)
+      {
+         if (isset($ormFields[$objVar]))
+         {
+            $dbFields[$dbVar] = $ormFields[$objVar];           
+         }
+      }
+      
+      // If dbFields is empty here, it means that no valid object fields were found in $ormFields.
+      // We return 0 to signify that no rows were modified, since we won't be performing any SQL
+      // UPDATE operation with no fields to update.
+      if (empty($dbFields))
+      {
+         return 0;
       }
 
-      // If we still have no id value, we can't really delete anything...
-      if (empty($id)) return FALSE;
+      $conditions = $this->ormConditions($conditions);      
+      $this->orm['writer']->doUpdate($this->orm['tableNameDb'], $dbFields, $conditions, $limit);
+      
+      return $this->orm['writer']->countRows();
+   }
+   
+   
+   
+   // Unsync the object and issue an SQL DELETE to remove it from the database table.  This will
+   // remove all internal data from the internal data array, leaving an the object with no tuple
+   // data, but otherwise intact with all settings and relations still defined.  Your calling code
+   // will need to remove the object itself if desired.
+   //
+   // @throws InvalidStateException if there is no primary key
+   // @throws ORMException on other errors
+   public function delete()
+   {
+      $primaryKeyField = $this->ormGetPrimaryKeyField();
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
 
-      $db = $this->orm['writer'];
-      $table = $this->orm['tableNameDb'];
-      $primaryKeyObj = $this->orm['primaryKey'];
-      $newCond[] = "{$primaryKeyObj} = {$id}";
-      $conditions = $this->ormConditions(array_merge($newCond, $conditions));
-      $db->doDelete($table, $conditions);
-
-   return TRUE;
+      if (empty($primaryKeyField))
+      {
+         throw new InvalidStateException("Delete failed: The ORM object did not have a primary key field properly defined");         
+      }
+      
+      // If we have no id value, we can't really delete anything...
+      if ($primaryKeyValue != 0 && empty($primaryKeyValue))
+      {
+         throw new InvalidStateException("Delete failed: The primary key was not set in this object");
+      }
+      
+      $conditions = $this->ormConditions(array("{$primaryKeyField} = {$primaryKeyValue}"));
+      $this->orm['writer']->doDelete($this->orm['tableNameDb'], $conditions, "LIMIT 1");
+      
+      $this->orm['data'] = array();
+      $this->orm['isDirty'] = false;
+      $this->orm['dbSync'] = false;
    }
 
 
+   // Currently not implemented.
    public function cascadeDelete()
    {
 
@@ -484,55 +656,31 @@ abstract class ORM
   /* Basic method to get tuple(s) that match specified criteria in conditions.
    *
    * Return an object, or if resultset from database has multiple rows/tuples, return an
-   * array of objects.  Force return of resultset as an array by setting retArray to TRUE,
+   * array of objects.  Force return of resultset as an array by setting retArray to true,
    * even if result contains one row.
    *
-   * If no results are found, return FALSE.  If retArray is set to TRUE, then empty array is
-   * returned instead of FALSE.
+   * If no results are found, return false.  If retArray is set to true, then empty array is
+   * returned instead of false.
    *
    * Magic method findAll() will always return an array of objects, and is a cleaner way of
-   * achieving the same result instead of setting retArray as TRUE.
+   * achieving the same result instead of setting retArray as true.
    *
-   * On error return FALSE no matter what.
+   * On error return false no matter what.
    */
 
-   public function find($conditions=array(), $order=NULL, $limit=NULL, $retArray=FALSE)
+   public function find($conditions=array(), $order=NULL, $limit=NULL, $retArray=false)
    {
       $ret = $this->ormLoad(ORM_NEW_OBJECT, 0, $this->ormConditions($conditions), $order, $limit);
 
-      if ($retArray == TRUE)
+      if ($retArray == true)
       {
-         if ($ret == FALSE)
+         if ($ret == false)
          {
             return array();
          }
       }
 
    return $ret;
-   }
-
-
-   // Execute a find statement and return the first result from the database.  This automatically puts a LIMIT clause on
-   // the underlying SQL statement for you.
-   //
-   // @return (mixed)  Returns ORM object on success, FALSE if no record/error condition.
-   public function findFirst($conditions, $order=NULL)
-   {
-      $ret = $this->find($conditions, $order, 1);
-
-      if (empty($ret))
-      {
-         return FALSE;
-      }
-
-      if (is_array($ret))
-      {
-         return $ret[0];
-      }
-      else
-      {
-         return $ret;
-      }
    }
 
 
@@ -547,7 +695,7 @@ abstract class ORM
    * Returns the same stuff as find().  See comments.
    */
 
-   public function findBy($objField, $objValue, $conditions=array(), $order=NULL, $limit=NULL, $retArray=FALSE)
+   public function findBy($objField, $objValue, $conditions=array(), $order=NULL, $limit=NULL, $retArray=false)
    {
       /* Generate conditions array */
       foreach ($this->orm['objectFieldMap'] as $key => $value)
@@ -560,14 +708,14 @@ abstract class ORM
 
       if (empty($conditions))
       {
-         return FALSE;
+         return false;
       }
 
       $ret = $this->ormLoad(ORM_NEW_OBJECT, 0, $this->ormConditions($conditions), $order, $limit);
 
-      if ($retArray == TRUE)
+      if ($retArray == true)
       {
-         if ($ret == FALSE)
+         if ($ret == false)
          {
             return array();
          }
@@ -581,7 +729,7 @@ abstract class ORM
   /* Get tuple by primary key.  This should always return a single row considering that the database is
    * correctly designed with a UNIQUE key as its primary key.
    *
-   * If no record can be found, return FALSE.
+   * If no record can be found, return false.
    */
 
    public function findByPrimaryKey($primaryKeyValue)
@@ -589,7 +737,7 @@ abstract class ORM
       if (empty($this->orm['primaryKey']))
       {
          //error(E_WARNING, "No primary key defined, therefore I cannot find a tuple.");
-         return FALSE;
+         return false;
       }
 
       /* Determine primary key for table and generate conditions array to locate 1 row in db */
@@ -638,12 +786,12 @@ abstract class ORM
          $this->load($this->ormGetPrimaryKeyValue());
       }
 
-   return TRUE;
+   return true;
    }
 
-
-
-  /* Return the total amount of rows in the table.  This essentially performs a COUNT() call on the primary
+   
+   
+   /* Return the total amount of rows in the table.  This essentially performs a COUNT() call on the primary
    * key of the table (ASSUMING it is properly indexed for speed) and returns the amount.  Useful for pagination.
    *
    * It would probably be faster to somehow implement SQL_CALC_FOUND_ROWS in the future for MySQL?
@@ -654,7 +802,7 @@ abstract class ORM
       if (empty($this->orm['primaryKey']))
       {
          //error(E_WARNING, "No primary key defined in my schema.  countTableRows() requires this to be defined.");
-         return FALSE;
+         return false;
       }
 
       $db = $this->orm['reader'];
@@ -680,12 +828,12 @@ abstract class ORM
    *
    */
 
-   function countTotalRows()
+   public function countTotalRows()
    {
       if (empty($this->orm['primaryKey']))
       {
          //error(E_WARNING, "No primary key defined in my schema.  countTotalRows() requires this to be defined.");
-         return FALSE;
+         return false;
       }
 
       $db = $this->orm['reader'];
@@ -705,31 +853,31 @@ abstract class ORM
    
 
    // Determine if the ORM object has any modifications that have not been synched up with the database.
-   // @return (boolean) TRUE if dirty data exists, otherwise FALSE
+   // @return boolean true if dirty data exists, otherwise false
    public function isDirty()
    {
       return $this->orm['isDirty'];
    }
 
 
-   // Determine if the ORM object has synched to the database.  Use this to determine if a load() call is successful.
-   // Note that you must use isDirty() to detect local modifications to the object data.  Once initially synched, then
-   // this will always return TRUE.
-   //
-   // @return (boolean) TRUE if object successful synched to db, otherwise FALSE.
+   // Determine if the ORM object has synched to the database.  Use this to determine if a load()
+   // call is successful. Note that you must use isDirty() to detect local modifications to the
+   // object data.  Once initially synched, then this will always return true.
+   // @return boolean true if object successful synched to db, otherwise false.
    public function isSynched()
    {
       return $this->orm['dbSync'];
    }
 
 
-   // Set the table db name that will be used in the SQL statements.  If for some reason you need to reference
-   // a db table that doesn't match the name of the class, you call this method to tell ORM to use the specified
-   // table instead.
+   // Set the table db name that will be used in the SQL statements.  If for some reason you need to
+   // reference a db table that doesn't match the name of the class, you call this method to tell ORM
+   // to use the specified table instead.
    //
-   // Example:  If you have a class called "Customer" but you need to reference the table like this: "mydatabase.Customer" 
+   // Example:  If you have a class called "Customer" but you need to reference the table like this:
+   // "Customers", or even "mydatabase.Customer" 
    //
-   // @param (string) $table   Table name.
+   // @param string $table Database table name.
    public function setTableDbName($dbTable)
    {
       $this->orm['tableNameDb'] = $dbTable;
@@ -737,18 +885,19 @@ abstract class ORM
    }
 
 
-   // Get the database table name.  This will usually match the class name unless otherwise set to something else with
-   // the setTableDbName() method.
-   // @return (string) The database table
+   // Get the database table name.  This will usually match the class name unless otherwise set to
+   // something else with the setTableDbName() method.
+   // @return string The database table
    public function getTableDbName()
    {
       return $this->orm['tableNameDb'];
    }
 
    
-   // Get the table name.  This will always match the class name, even if the actual database table has been set to something
-   // else.  We need it to match the class name when converting SQL result sets to class data.
-   // @return (string)  table name
+   // Get the table name.  This will always match the class name, even if the actual database table
+   // has been set to something else.  We need it to match the class name when converting SQL result
+   // sets to class data.
+   // @return string table name
    public function getTableName()
    {
       return $this->orm['tableName'];
@@ -756,8 +905,8 @@ abstract class ORM
    
    
    // Magic method broker.  This makes the loadByN, findN, findByN, getN and setN methods work.
-   // @param (string) $method   The name of the method called.
-   // @param (Array)  $args     Arguments passed to the method.
+   // @param string $method The name of the method called.
+   // @param array $args Arguments passed to the method.
    public function __call($method, $args)
    {
       // loadByX where X is a fieldObjName
@@ -767,7 +916,7 @@ abstract class ORM
          if (!isset($args[0]))
          {
             //error(E_WARNING, "Magic loadBy() method expects the field name.");
-            return FALSE;
+            return false;
          }
 
          /* Default values to pass */
@@ -788,7 +937,7 @@ abstract class ORM
          if (!isset($args[0]))
          {
             //error(E_WARNING, "Magic findAllBy() method expects the field value as the first argument");
-            return FALSE;
+            return false;
          }
 
          /* Default values to pass */
@@ -797,7 +946,7 @@ abstract class ORM
          if (!isset($args[3])) $args[3] = NULL;
 
          /* Call find() method with appropriate arguments */
-         return $this->findBy($matches[1], $args[0], $args[1], $args[2], $args[3], TRUE);
+         return $this->findBy($matches[1], $args[0], $args[1], $args[2], $args[3], true);
       }
 
 
@@ -808,7 +957,7 @@ abstract class ORM
          if (!isset($args[0]))
          {
             //error(E_WARNING, "Magic findBy() method expects the field value as the first argument");
-            return FALSE;
+            return false;
          }
 
          /* Default values to pass */
@@ -829,7 +978,7 @@ abstract class ORM
          if (!isset($args[1])) $args[1] = NULL;
          if (!isset($args[2])) $args[2] = NULL;
 
-         return $this->find($args[0], $args[1], $args[2], TRUE);
+         return $this->find($args[0], $args[1], $args[2], true);
       }
 
       // NOTE:  There might be some conflict here, since we have some hard coded methods that start with
@@ -842,7 +991,7 @@ abstract class ORM
          if (!isset($args[0]))
          {
             //error(E_WARNING, "Magic set() method expects the field value as the first argument");
-            return FALSE;
+            return false;
          }
 
          $fieldNameObj = $matches[1];
@@ -870,16 +1019,227 @@ abstract class ORM
 
 
    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+   //
    // ORM protected and private methods for internal use.  Herein ends the public interface.
+   //
    // NOTE: Some methods are public because they sometimes are called from other separate orm objects for the
    // purpose of building relationships/associations.
+   //
    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
+   // Set the data field on the object.  Call any events, and set the dirty flag if the value changes.
+   // @return boolean true if value set, false if value was not set
+   public function ormSet($objField, $objValue)
+   {
+      // If the value is the same as the existing value, don't mark the ORM object as dirty since
+      // nothing changed. No events are executed, and this will not prompt any SQL statements to
+      // be executed, etc..            
+      if ($objValue == $this->orm['data'][$objField])
+      {
+         return false;
+      }
+            
+      if (method_exists($this, "onBeforeSet"))
+      {
+         $eventValue = $this->onBeforeSet($objField, $objValue);
+         
+         if ($eventValue != null)
+         {
+            $objValue = $eventValue;
+         }
+	
+      }
 
-   // Add a mapping between an object field and a database field.  This is designed to be called from your ORM object's constructor.
-   // @param (string) $objectField   The name of your object's variable
-   // @param (string) $dbField       The database field name equivalent. 
+      $this->orm['data'][$objField] = $objValue;
+      $this->orm['isDirty'] = true;
+	    
+      if (method_exists($this, "onAfterSet"))
+      {
+         $this->onAfterSet($objField, $objValue);
+      }
+      
+      return true;
+   }
+   
+   
+   // This method is part of setFields().  It is responsible for recursively setting field data on
+   // related objects.  It can handle setting a single set of field data, or arrays of field data
+   // for multiple related objects.  In theory, it should be able to keep traversing related objects
+   // and their related objects.
+   //
+   // @throws ORMException for errors
+   private function ormSetRelationFields($fields, $longClassName, $shortClassName, $relationKey)
+   {
+      list($primaryKeyField, $foreignKeyField) = split(":", $relationKey);
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
+      
+      if (empty($primaryKeyField) || empty($foreignKeyField)) throw new ORMException("setRelationFields() was not passed in a properly formated relationKey: '{$relationKey}'");
+      if (empty($primaryKeyValue)) throw new ORMException("setRelationFields() detected an empty primary key value from ormGetPrimaryKeyValue()");
+      
+      // If fields is a numeric array, this signifies a 'has many' relationship.  We will presumably
+      // have 1 or more data sets for the related object in the array.
+      if (is_array($fields) && !$this->ormIsAssoc($fields))
+      {
+         $this->ormSetRelationFieldsHasMany($fields, $longClassName, $shortClassName, $foreignKeyField, $primaryKeyValue);
+      }
+      
+      // If fields is not a numerically indexed array, we assume it's either an assoc array of
+      // key=>value pairs, or an object with properties. This is a 'has one' relationship, so we
+      // expect to find only a single object internally as well.
+      else
+      {
+         $this->ormSetRelationFieldsHasOne($fields, $longClassName, $shortClassName, $foreignKeyField, $primaryKeyValue);
+      }
+   }
+   
+   
+   // Part of setFields().  Sets fields on internal objects with has many relationships.
+   // @throws ORMException for errors
+   private function ormSetRelationFieldsHasMany($fields, $longClassName, $shortClassName, $foreignKeyField, $primaryKeyValue)
+   {
+      // If we do not have any objects loaded internally, then it means that our has many relationship
+      // is defined but there is no data in the database.  The new data in fields will have to be
+      // added as new objects to be inserted in the database later with save().
+      if (!isset($this->orm['data'][$shortClassName]) || count($this->orm['data'][$shortClassName]) == 0)
+      {
+         $this->data[$shortClassName] = [];
+
+         foreach ($fields as $relatedFields)
+         {
+            $relatedObj = new $longClassName;
+            $relatedObj->setQueryBuilderReader($this->getReader());
+            $relatedObj->setQueryBuilderWriter($this->getWriter());
+            $relatedObj->setFields($relatedFields);
+            $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+            $this->orm['data'][$shortClassName][] = $relatedObj;
+         }
+      }
+         
+      // We have 1 or more objects already loaded.  This is the most complex part.  We iterate
+      // through the fields array, and grab the primary key value for each fieldset, then use that
+      // id value to match up to the internal object.  We set the fields on the matched object.  If
+      // we can't find a match, or the primary key value in the fields data isn't present, then we
+      // just create a new object in both cases and add it to the array to be saved in the db later
+      // with save()
+      else if (count($this->orm['data'][$shortClassName]) > 0)
+      {
+         if (!isset($this->orm['data'][$shortClassName][0]) || !method_exists($this->orm['data'][$shortClassName][0], "ormGetPrimaryKeyField"))
+         {
+            throw new ORMException("setRelationFields() detected a numeric internal array for {$shortClassName}, but index 0 was not an ORM object.");
+         }
+            
+         $relatedPrimaryKeyField = $this->orm['data'][$shortClassName][0]->ormGetPrimaryKeyField();
+            
+         if (empty($relatedPrimaryKeyField))
+         {
+            throw new ORMException("setRelationFields() tried to get primary key field for related object {$relatedPrimaryKeyField} but it returned an empty value. This could mean the related object is improperly configured.");               
+         }
+            
+         foreach ($fields as $relatedFields)
+         {
+            // If we have a primary key, we use that to find the matching related object in memory.
+            if (isset($relatedFields[$relatedPrimaryKeyField]) || !empty($relatedFields[$relatedPrimaryKeyField]))
+            {
+               $relatedPrimaryKeyValue = $relatedFields[$relatedPrimaryKeyField];
+               $relatedObj = $this->ormFindRelationByPrimaryKey($shortClassName, $relatedPrimaryKeyValue);
+               
+               // If we found a related object, then we update the fields on it.
+               if ($relatedObj)
+               {
+                  $relatedObj->setFields($relatedFields);
+               }
+                  
+               // If we get here, and haven't found a matching object in memory, we create a new
+               // object here and add it to the array.
+               else
+               {
+                  $relatedObj = new $longClassName;
+                  $relatedObj->setQueryBuilderReader($this->getReader());
+                  $relatedObj->setQueryBuilderWriter($this->getWriter());
+                  $relatedObj->setFields($relatedFields);
+                  $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+                  $this->orm['data'][$shortClassName][] = $relatedObj;                     
+               }
+            }
+               
+            // If we have no primary key in relatedFields, assume this is a new object and create
+            // it to be inserted into the db later with save()
+            else
+            {
+               $relatedObj = new $longClassName;
+               $relatedObj->setQueryBuilderReader($this->getReader());
+               $relatedObj->setQueryBuilderWriter($this->getWriter());
+               $relatedObj->setFields($relatedFields);
+               $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+               $this->orm['data'][$shortClassName][] = $relatedObj;
+            }
+         }
+      }      
+   }
+   
+   
+   // Part of setFields().  This sets field data on internal objects that have a has one relationship.
+   private function ormSetRelationFieldsHasOne($fields, $longClassName, $shortClassName, $foreignKeyField, $primaryKeyValue)
+   {
+      // If it exists, then we update the fields on it.
+      if (isset($this->orm['data'][$shortClassName]))
+      {
+         $this->orm['data'][$shortClassName]->setFields($fields);   
+      }
+         
+      // If it does not exist, then we will create a new object to be inserted in the db later with save()
+      else
+      {
+         $relatedObj = new $longClassName;
+         $relatedObj->setQueryBuilderReader($this->getReader());
+         $relatedObj->setQueryBuilderWriter($this->getWriter());
+         $relatedObj->setFields($fields);
+         $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+         $this->orm['data'][$shortClassName] = $relatedObj;
+      }      
+   }
+   
+   
+   // This method attempts to find a related object by its primary key value, assuming the ORM object
+   // has been synched with the database via load or find.
+   // @param string $shortClassName The short class name of the related object
+   // @param mixed $primaryKeyValue The value of the primary key to match
+   // @return mixed Returns the related object, or false on no match.
+   protected function ormFindRelationByPrimaryKey($shortClassName, $primaryKeyValue)
+   {
+      foreach ($this->orm['data'][$shortClassName] as $relatedObject)
+      {
+         if (method_exists($relatedObject, "ormGetPrimaryKeyValue") && $relatedObject->ormGetPrimaryKeyValue() == $primaryKeyValue)
+         {
+            return $relatedObject;
+         }
+      }
+      
+      return false;
+   }
+   
+   
+   // Return true if array is an associtive array, or false if a numeric array.  It does not check for
+   // sequential numbering of sequential arrays.
+   // http://stackoverflow.com/questions/173400/how-to-check-if-php-array-is-associative-or-sequential
+   // @param array $arr
+   // @return boolean
+   protected function ormIsAssoc($arr)
+   {
+      foreach ($arr as $key => $value)
+      {
+         if (is_string($key)) return true;
+      }
+      
+      return false;
+   }
+   
+   
+   // Add a mapping between an object field and a database field.  This is designed to be called
+   // from your ORM object's constructor.
+   // @param string $objectField The name of your object's variable
+   // @param string $dbField The database field name equivalent. 
    protected function addMap($objectField, $dbField)
    {
       $key = "{$this->orm['tableNameDb']}.{$dbField}";
@@ -888,7 +1248,8 @@ abstract class ORM
       $this->orm['objectFieldMap'][$objectField] = $this->orm['tableNameDb'] . "." . $dbField;
       $this->orm['insertUpdateMap'][$objectField] = $dbField;
 
-      // Set the class property with a null value.  Also need to unset the dirty flag because of the way we're doing object setting.
+      // Set the class property with a null value.  Also need to unset the dirty flag because of the
+      // way we're doing object setting.
       $this->$objectField = null;
       $this->orm['isDirty'] = false;
    }
@@ -921,85 +1282,72 @@ abstract class ORM
    
    // Adds a relationship/association to an ORM model.
    //
-   // @param (constant) $relation_type   One of the defined ORM relation definitions.
-   // @param (string)   $class_name      The name of the related ORM class.
-   // @param (string)   $linker          Depending on relation type, could be foreign key, or link table.
-   // @return (boolean) TRUE/FALSE
-   protected function addRelation($relation_type, $class_name, $linker)
+   // @param int $relation_type One of the defined ORM relation definitions.
+   // @param string $class_name The name of the related ORM class.
+   // @param string $keyMap Local key and foreign key relatonship "myId:foreignId"
+   // @param string $linkTable If using a db link table for many to many relationships, specify it here
+   // @return boolean true/false
+   protected function addRelation($relation_type, $class_name, $keyMap, $linkTable=null)
    {
       $short_class_name = $this->getShortClassName($class_name);
       
-      //$short_class_name = $this->getShortClassName($class_name);
-      if ($this->orm['loadRelations'] == FALSE) return TRUE;
+      if ($this->orm['loadRelations'] == false) return true;
       $r = array();
 
       switch ($relation_type)
       {
          case ORM_HAS_ONE:
            $r['type'] = $relation_type;
-           $r['key'] = $linker; // foreign key
+           $r['key'] = $keyMap; // foreign key
            $this->orm['relations'][$class_name] = $r;
-           $this->orm['classes'][$class_name] = new $class_name(FALSE);
+           $this->orm['classes'][$class_name] = new $class_name(false);
            $this->{$short_class_name} = $this->orm['classes'][$class_name];
          break;
 
          case ORM_MIGHT_HAVE_ONE:
            $r['type'] = $relation_type;
-           $r['key'] = $linker; // foreign key
+           $r['key'] = $keyMap; // foreign key
            $this->orm['relations'][$class_name] = $r;
-           $this->orm['classes'][$class_name] = new $class_name(FALSE);
+           $this->orm['classes'][$class_name] = new $class_name(false);
            $this->{$short_class_name} = $this->orm['classes'][$class_name];
          break;
          
          case ORM_HAS_MANY:
-           $relationMap[$class_name] = TRUE;
+           $relationMap[$class_name] = true;
            $r['type'] = $relation_type;
-           $r['key'] = $linker; // foreign key
+           $r['key'] = $keyMap; // foreign key
            $this->orm['relations'][$class_name] = $r;
-           $this->orm['classes'][$class_name] = new $class_name(FALSE);
+           $this->orm['classes'][$class_name] = new $class_name(false);
+           $this->{$short_class_name} = array();
+         break;
+
+         case ORM_MANY_TO_MANY:
+           $relationMap[$class_name] = true;
+           $r['type'] = $relation_type;
+           $r['key'] = $keyMap; // foreign key
+           $r['linkTable'] = $linkTable;
+           $this->orm['relations'][$class_name] = $r;
+           $this->orm['classes'][$class_name] = new $class_name(false);
            $this->{$short_class_name} = array();
          break;
 
          case ORM_BELONGS_TO:
-           $relationMap[$class_name] = TRUE;
+           $relationMap[$class_name] = true;
            $r['type'] = $relation_type;
-           $r['key'] = $linker; // foreign key
+           $r['key'] = $keyMap; // foreign key
            $this->orm['relations'][$class_name] = $r;
-           $this->orm['classes'][$class_name] = new $class_name(FALSE);
+           $this->orm['classes'][$class_name] = new $class_name(false);
            $this->{$short_class_name} = $this->orm['classes'][$class_name];
          break;
-         
-         case ORM_HAS_AND_BELONGS_TO_MANY:
-           $relationMap[$class_name] = TRUE;
-           $r['type'] = $relation_type;
-           $r['linkTable'] = $linker;
-           $this->orm['relations'][$class_name] = $r;
-           $this->orm['classes'][$class_name] = new $class_name(FALSE);
-           $this->{$short_class_name} = array();
-         break;
-         
+                  
          default:
-            return FALSE;
+            return false;
          break;
       }
 
-   return TRUE;
+   return true;
    }
 
-
-   // Set the cascade save setting to true or false for enable/disable
-   protected function setCascadeSave($val=false)
-   {
-      $this->orm['cascadeSave'] = $val;
-   }
-
-   
-   // Set the cascade delete setting to true or false for enable/disable
-   protected function setCascadeDelete($val=false)
-   {
-      $this->orm['cascadeDelete'] = $val;
-   }
-   
    
   /* Add a Unique field restraint to field(s).  This will cause ORM to use the doUniqueInsert() method
    * when making calls to insert data to the database.
@@ -1009,12 +1357,13 @@ abstract class ORM
 
    protected function addUnique($fields)
    {
-      $this->orm['unique'] = TRUE;
+      $this->orm['unique'] = true;
    }
 
 
-   // Return the current primary key value in the object.  This is a public function because the ORM code has so
-   // reference extrnal objects to manage relationships, and if the method was protected, this would throw errors.
+   // Return the current primary key value in the object.  This is a public function because the ORM
+   // code has so reference extrnal objects to manage relationships, and if the method was protected,
+   // this would throw errors.
    public function ormGetPrimaryKeyValue()
    {
       $p = $this->orm['primaryKey'];
@@ -1030,8 +1379,8 @@ abstract class ORM
    }
 
 
-   // Return the primary key field name as defined in the object. Needs to be a public function so that other
-   // orm objects can call this method when needed.
+   // Return the primary key field name as defined in the object. Needs to be a public function so
+   // that other orm objects can call this method when needed.
    // @return (string) field name
    public function ormGetPrimaryKeyField()
    {
@@ -1039,8 +1388,8 @@ abstract class ORM
    }
 
 
-   // Return the primary key field name as defined in the database.  Needs to be a public function so that other
-   // orm objects can call this method when needed.
+   // Return the primary key field name as defined in the database.  Needs to be a public function so
+   // that other orm objects can call this method when needed.
    // @return (string) field name
    public function ormGetPrimaryKeyDbField()
    {
@@ -1051,25 +1400,167 @@ abstract class ORM
 
 
    // Check if the current ORM object has any relations defined.
-   // @return (boolean)  TRUE if relations are defined, FALSE otherwise.
+   // @return boolean true if relations are defined, false otherwise.
    private function ormHasRelations()
    {
       if (count($this->orm['relations']) > 0)
       {
-         return TRUE;
+         return true;
       }
       else
       {
-         return FALSE;
+         return false;
       }
    }
 
+   
+   // Perform the save operation on all related objects.  They will determine their internal state and
+   // determine if they need to perform SQL INSERT or UPDATE commands to the database.
+   //
+   // Note: What happens if rollbackTransaction fails?  Right now this could leave the DB connection in
+   // an invalid state.  I'm not sure what to check for in this edge case.
+   //
+   // @throws InvalidStateException for data integrity problems
+   // @throws ORMException on all other errors
+   private function ormCascadeSave()
+   {
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
+      
+      if ($primaryKeyValue != 0 && empty($primaryKeyValue))
+      {
+         throw new InvalidStateException("Cascade save failed to start: The primary key was not set in this object.");
+      }
+      
+      try
+      {
+         if ($this->orm['enableTransactions']) $this->orm['writer']->beginTransaction();         
+      }
+      catch (\Exception $e)
+      {
+            throw new ORMException("Cascade save failed to start: Could not start a transaction.", 0, $e);         
+      }
+      
+      foreach ($this->orm['relations'] as $longClassName => $relDetail)
+      {
+         $shortClassName = $this->getShortClassName($longClassName);
 
-  /* Save object data to database, performing the initial synchronization.
-   *
-   * Need to do a better job for AUTO_INCREMENT primary keys.  What about SEQUENCES??
-   */
+         if (!isset($this->orm['data'][$shortClassName]) || empty($this->orm['data'][$shortClassName]))
+         {
+            continue;
+         }
 
+         list($primaryKeyField, $foreignKeyField) = explode(":", $relDetail['key']);
+
+         if (empty($primaryKeyField) || empty($foreignKeyField))
+         {
+            $this->cascadeSaveInvalidStateException("There is an invalid key 'local:foreign' in relation definition for {$shortClassName}");
+         }
+	 
+         // If we have a numeric array, we have a 'has many' relationship, and we need to iterate
+         // through the array of related objects.  If the array is empty, then we just won't do
+         // anything and move on...
+         if (is_array($this->orm['data'][$shortClassName]) && !$this->isAssoc($this->orm['data'][$shortClassName]))
+         {
+            $i = 0;
+            
+            foreach ($this->orm['data'][$shortClassName] as $objRef)
+            {
+               if (!method_exists($objRef, "get") || !method_exists($objRef, "save"))
+               {
+                  $this->cascadeSaveInvalidStateException("Related object {$shortClassName} in array position {$i} is not a valid ORM object.");                  
+               }
+               
+               // Check that the foreign key equals our primary key.  If not, we don't save this.
+               if ($objRef->get($foreignKeyField) == $primaryKeyValue)
+               {
+                  try
+                  {
+                     $objRef->save();                     
+                  }
+                  catch (\Exception $e)
+                  {
+                     $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
+                  }
+               }
+               else
+               {
+                  $this->cascadeSaveInvalidStateException("Related object {$shortClassName} in array position {$i} did not have our foreign key set in object field '{$foreignKeyField}'");
+               }
+               
+               $i++;
+            }
+         }
+         
+         // Here we assume an assoc. array of key=>value pairs, or an object with properties.  This
+         // signifies a 'has one' relationship, so we attempt to save this single related object.
+         else
+         {
+            $objRef = $this->orm['data'][$shortClassName];
+            
+            if (!method_exists($objRef, "get") || !method_exists($objRef, "save"))
+            {
+               $this->cascadeSaveORMException("Related object {$shortClassName} is not a valid ORM object");                     
+            }
+               
+            // Check that the foreign key equals our primary key.  If not, we don't save this.
+            if ($objRef->get($foreignKeyField) == $primaryKeyValue)
+            {
+               try
+               {
+                  $objRef->save();                     
+               }
+               catch (\Exception $e)
+               {
+                  $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName}", $e);
+               }
+            }
+            else
+            {
+               $this->cascadeSaveInvalidStateException("Related object {$shortClassName} did not have our foreign key set in object field '{$foreignKeyField}'");
+            }            
+         }
+      }
+      
+      if ($this->orm['enableTransactions']) $this->orm['writer']->commitTransaction();
+   }
+
+   
+   // Utility function to rollback transaction if enabled, and throw an exception
+   private function cascadeSaveInvalidStateException($message, \Exception $e = null)
+   {
+      if ($this->orm['enableTransactions'])
+      {
+         $this->orm['writer']->rollbackTransaction();
+         throw new InvalidStateException("Cascade save transaction rollback: {$message}", 0, $e);                  
+      }
+      else
+      {
+         throw new InvalidStateException("Cascade save failure: {$message}: No transaction rollback attempted.", 0, $e);
+      }      
+   }
+
+
+   // Utility function to rollback transaction if enabled, and throw an exception
+   private function cascadeSaveORMException($message, \Exception $e = null)
+   {
+      if ($this->orm['enableTransactions'])
+      {
+         $this->orm['writer']->rollbackTransaction();
+         throw new ORMException("Cascade save transaction rollback: {$message}", 0, $e);
+      }
+      else
+      {
+         throw new ORMException("Cascade save failure: {$message}: No transaction rollback attempted.", 0, $e);
+      }      
+   }
+   
+   
+   // Perform a SQL INSERT operation on the object.
+   //
+   // TODO: Implement better handing of primary keys.  Right now we only support auto increment
+   //       keys in MySQL.  Lame.
+   //
+   // @throws ORMException on error
    public function ormSave()
    {
       if (method_exists($this, "onBeforeSave"))
@@ -1079,87 +1570,54 @@ abstract class ORM
       
       if (empty($this->orm['primaryKey']))
       {
-         //error(E_WARNING, "No primary key defined, therefore I cannot save a tuple in the database.");
-         return FALSE;
+         throw new ORMException("No primary key defined, therefore I cannot save a tuple in the database.");
       }
 
       foreach ($this->orm['insertUpdateMap'] as $objVar => $dbVar)
       {
-         $fields[$dbVar] = $this->{$objVar};
+         $fields[$dbVar] = $this->orm['data'][$objVar];
       }
 
-      if ($this->orm['unique'] == TRUE)
-        $iMethod = "doUniqueInsert";
+      if ($this->orm['unique'] == true)
+      {
+         $iMethod = "doUniqueInsert";
+      }
       else
-        $iMethod = "doInsert";
+      {
+         $iMethod = "doInsert";
+      }
 
       if (!$this->orm['writer']->{$iMethod}($this->orm['tableNameDb'], $fields))
-        return FALSE;
-
-      /* Right now this assumes auto_incrementing primary keys in MySQL only.  If the primary key is empty, attempt to get it from the db. */
-      $primaryKey = $this->orm['primaryKey'];
-      if (empty($this->{$primaryKey})) $this->{$primaryKey} = $this->orm['writer']->lastInsertId();
-
-      $this->orm['dbSync'] = TRUE;
-      $this->orm['isDirty'] = FALSE;
-      
-      if ($this->orm['cascadeSave'] == true)
       {
-         $this->ormCascadeSave();
+         throw new ORMException("The QueryBuilder could not perform the operation: {$iMethod}");
       }
+
+      // Right now this assumes auto_incrementing primary keys in MySQL only.  If the primary key is
+      // empty, attempt to get it from the db.
+      
+      $primaryKeyField = $this->ormGetPrimaryKeyField();
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
+      
+      if (empty($primaryKeyValue))
+      {
+         $this->orm['data'][$primaryKeyField] = $this->orm['writer']->lastInsertId();
+      }
+      
+      $this->orm['dbSync'] = true;
+      $this->orm['isDirty'] = false;
       
       if (method_exists($this, "onAfterSave"))
       {
          $this->onAfterSave();
       }
 
-   return TRUE;
+      return true;
    }
-
-
-
-   // Cascading save.  We have two scenarios here that we want to take into account when saving objects for the first time.
-   // A) Objects that are related using INNER JOINS (Belongs to, HAS ONE) will be saved, even with empty records.  The
-   //    relationship dictates that there should always be a related object of this type, so it gets inserted no matter what.
-   // B) Objects that are related using a LEFT JOIN (Might have one, has many) will only get saved if the related object is
-   //    dirty, meaning that it has been modified and needs to save.  Otherwise, any related objects will get skipped.
-   private function ormCascadeSave()
-   {
-      foreach ($this->orm['relations'] as $class => $relDetail)
-      {	 
-	 // Make sure the related object is available.  It should always be.
-	 if (!isset($this->$class))
-	 {
-	    continue;
-	 }
-	 
-	 // $ref will be a pointer to the related object.	 
-	 $ref = $this->$class;
-
-	 if ($ref->isDirty() || $relDetail['type'] == ORM_HAS_ONE || $relDetail['type'] == ORM_BELONGS_TO)
-	 {
-            // Is key in format of localkey:foreignKey?
-            if (strpos($relDetail['key'], ":", 1))
-            {
-               list($localKey, $foreignKey) = explode(":", $relDetail['key']);
-	    }
-	    // Otherwise we assume the srting represents the key variable on both objects.
-	    else
-	    {
-	       $localKey = $foreignKey = $relDetail['key'];  
-	    }
-	 
-	    // Get value of local key, and set foreign key with this value.  Sync the related object to the db.
-	    $ref->set($foreignKey, $this->get($localKey));
-	    $ref->ormSave();   
-	 }
-      }      
-   }
-
-
-  /* Update object data in database using primary key.
-   */
-
+   
+   
+   // Perform a SQL update operation on this object.
+   // @throws InvalidStateException
+   // @throws ORMException
    public function ormUpdate()
    {
       if (method_exists($this, "onBeforeUpdate"))
@@ -1167,64 +1625,30 @@ abstract class ORM
          $this->onBeforeUpdate();
       }
       
-      $pkv = $this->ormGetPrimaryKeyValue();
+      $primaryKeyField = $this->ormGetPrimaryKeyField();
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
 
-      if (empty($pkv))
+      if ($primaryKeyValue !=0 && empty($primaryKeyValue))
       {
-         //error(E_WARNING, "ormUpdate() found an empty primary key in the object.  Impossible to update.");
-         return FALSE;
+         throw new InvalidStateException("The object did not have a primary key set.");                  
       }
 
       foreach ($this->orm['insertUpdateMap'] as $objVar => $dbVar)
       {        
-         $fields[$dbVar] = $this->$objVar;
+         $fields[$dbVar] = $this->orm['data'][$objVar];
       }
 
-      $conditions = $this->ormConditions(array("{$this->orm['primaryKey']} = {$pkv}"));
-      
-      if (!$this->orm['writer']->doUpdate($this->orm['tableNameDb'], $fields, $conditions))
-      {
-        return FALSE;
-      }
+      $conditions = $this->ormConditions(array("{$primaryKeyField} = {$primaryKeyValue}"));      
+      $this->orm['writer']->doUpdate($this->orm['tableNameDb'], $fields, $conditions, "LIMIT 1");
 
-      if ($this->orm['cascadeSave'] == true)
-      {
-	 $this->ormCascadeUpdate();
-      }
-      
       if (method_exists($this, "onAfterUpdate"))
       {
          $this->onAfterUpdate();
       }
 
-   return TRUE;
+   return true;
    }
-   
-
-
-   // Cascading update. Loop through relations, and trigger an update on any objects that have the dirty flag
-   // set, syncing changes with the database for that object.
-   private function ormCascadeUpdate()
-   {
-      foreach ($this->orm['relations'] as $class => $relDetail)
-      {	 
-	 // Make sure the related object is available.  It should always be.
-	 if (!isset($this->$class))
-	 {
-	    continue;
-	 }
-	 
-	 // $ref will be a pointer to the related object.	 
-	 $ref = $this->$class;
-
-	 if ($ref->isDirty())
-	 {
-	    $ref->ormUpdate();      
-	 }
-      }
-   }
-   
-   
+      
    
    // Start the data loading process.  Build and execute SQL query / queries based on the object maps
    // and relationships defined in the ORM object. This is pretty complex stuff.
@@ -1233,20 +1657,21 @@ abstract class ORM
    private function ormLoad($type=ORM_THIS_OBJECT, $expectedRows=1, $conditions, $order=NULL, $limit=NULL)
    {
       $hasMany = 0;
-
-      // Call the beforeload callback in the current instance.  Make sure your callback defines the function arguments
-      // to be passed BY REFERENCE so you can modify them as needed!
+      
+      // Call the beforeload callback in the current instance.  Make sure your callback defines the
+      // function arguments to be passed BY REFERENCE so you can modify them as needed!
       if (method_exists($this, "onBeforeLoad"))
       {
-         // If we detect a FALSE return value, stop the load process.
-         if ($this->onBeforeLoad($type, $conditions, $order, $limit) === FALSE)
+         // If we detect a false return value, stop the load process.
+         if ($this->onBeforeLoad($type, $conditions, $order, $limit) === false)
          {
             return array();
          }
       }
       
-      // Define the primary query now to get the minimal from the database.  Subsequent call to parimaryQuery() will define
-      // any JOINS for that query.  Subsequent Has many joins will go into subsequent queries.  See code/comments below.
+      // Define the primary query now to get the minimal from the database.  Subsequent call to
+      // parimaryQuery() will define any JOINS for that query.  Subsequent Has many joins will go
+      // into subsequent queries.  See code/comments below.
       $this->primaryQuery(array($this->orm['tableNameDb']), $this->orm['selectMap'], $conditions, $order, $limit);
 
 
@@ -1256,12 +1681,12 @@ abstract class ORM
          // We add to the primary query by making JOINS for every relationship of this type.
          if ($relDetail['type'] == ORM_HAS_ONE || $relDetail['type'] == ORM_BELONGS_TO || $relDetail['type'] == ORM_MIGHT_HAVE_ONE)
          {
-            $fields = $this->orm['selectMap'];
             $classRef = $this->orm['classes'][$class];
             $foreignTable = $classRef->orm['tableNameDb'];
             $expectedRows = 0;
 
-            // Might have one signifies that there is a possible 1 to 1 mapping, but it is possible that the row in the foreign table does not exist.
+            // Might have one signifies that there is a possible 1 to 1 mapping, but it is possible
+            // that the row in the foreign table does not exist.
             if ($relDetail['type'] == ORM_MIGHT_HAVE_ONE)
             {
                $joinType = "LEFT JOIN";
@@ -1271,82 +1696,50 @@ abstract class ORM
                $joinType = "INNER JOIN";
             }
 
-            // Is key in format of localkey:foreignKey?
-            if (strpos($relDetail['key'], ":", 1))
-            {
-               list($localKey, $foreignKey) = explode(":", $relDetail['key']);
+            list($localKey, $foreignKey) = explode(":", $relDetail['key']);
 
-               // Get local table and key from map
-               $fieldArrLocal = explode(".", $this->orm['objectFieldMap'][$localKey]);
-               $localKeyDb = array_pop($fieldArrLocal);
-               $localTable = implode(".", $fieldArrLocal); 
+            // Get local table and key from map
+            $fieldArrLocal = explode(".", $this->orm['objectFieldMap'][$localKey]);
+            $localKeyDb = array_pop($fieldArrLocal);
+            $localTable = implode(".", $fieldArrLocal); 
 
-               // Get foreign table and key from map
-               $fieldArrForeign = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
-               $foreignKeyDb = array_pop($fieldArrForeign);
-               $foreignTable = implode(".", $fieldArrForeign); 
+            // Get foreign table and key from map
+            $fieldArrForeign = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
+            $foreignKeyDb = array_pop($fieldArrForeign);
+            $foreignTable = implode(".", $fieldArrForeign); 
 
-               //list($localTable, $localKeyDb) = explode(".", $this->orm['objectFieldMap'][$localKey]);
-               //list($foreignTable, $foreignKeyDb) = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
-               $tables[$foreignTable] = "LEFT JOIN {$localTable}.{$localKeyDb} = {$foreignTable}.{$foreignKeyDb}";               
-            }
-            // Key is the same on both objects
-            else
-            {
-               $fieldArr = explode(".", $this->orm['objectFieldMap'][$relDetail['key']]);
-               $foreignKey = array_pop($fieldArr);
-               $localTable = implode(".", $fieldArr); 
-               //list($localTable, $foreignKey) = explode(".", $this->orm['objectFieldMap'][$relDetail['key']], 2);
-               $tables[$foreignTable] = "{$joinType} {$localTable}.{$foreignKey} = {$foreignTable}.{$foreignKey}";
-            }
+            $tables[$foreignTable] = "LEFT JOIN {$localTable}.{$localKeyDb} = {$foreignTable}.{$foreignKeyDb}";               
 
-            $fields = array_merge($fields, $classRef->orm['selectMap']);
-            
             // add to primary query queue
+            $fields = array_merge($this->orm['selectMap'], $classRef->orm['selectMap']);            
             $this->primaryQuery($tables, $fields);
          }
 
-         // HAS MANY relationships are a little bit more complex.  See below.
+         // MANY relationships are a little bit more complex.  See below.
          else if ($relDetail['type'] == ORM_HAS_MANY)
          {
-            $fields = $this->orm['selectMap'];
             $classRef = $this->orm['classes'][$class];
             $foreignTable = $classRef->orm['tableNameDb'];
             $expectedRows = 0; // We probably will have multiple rows with this relation
 
-            // Is key in format of localkey:foreignKey?
-            if (strpos($relDetail['key'], ":", 1))
-            {
-               list($localKey, $foreignKey) = explode(":", $relDetail['key']);
+            list($localKey, $foreignKey) = explode(":", $relDetail['key']);
 
-               // Get local table and key from map
-               $fieldArrLocal = explode(".", $this->orm['objectFieldMap'][$localKey]);
-               $localKeyDb = array_pop($fieldArrLocal);
-               $localTable = implode(".", $fieldArrLocal); 
+            // Get local table and key from map
+            $fieldArrLocal = explode(".", $this->orm['objectFieldMap'][$localKey]);
+            $localKeyDb = array_pop($fieldArrLocal);
+            $localTable = implode(".", $fieldArrLocal); 
 
-               // Get foreign table and key from map
-               $fieldArrForeign = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
-               $foreignKeyDb = array_pop($fieldArrForeign);
-               $foreignTable = implode(".", $fieldArrForeign); 
+            // Get foreign table and key from map
+            $fieldArrForeign = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
+            $foreignKeyDb = array_pop($fieldArrForeign);
+            $foreignTable = implode(".", $fieldArrForeign); 
 
-               //list($localTable, $localKeyDb) = explode(".", $this->orm['objectFieldMap'][$localKey]);
-               //list($foreignTable, $foreignKeyDb) = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
-               $tables[$foreignTable] = "LEFT JOIN {$localTable}.{$localKeyDb} = {$foreignTable}.{$foreignKeyDb}";               
-            }
-            // Key is the same on both objects
-            else
-            {
-               $fieldArr = explode(".", $this->orm['objectFieldMap'][$relDetail['key']]);
-               $foreignKey = array_pop($fieldArr);
-               $localTable = implode(".", $fieldArr); 
-               //list($localTable, $foreignKey) = explode(".", $this->orm['objectFieldMap'][$relDetail['key']]);
-               $tables[$foreignTable] = "LEFT JOIN {$localTable}.{$foreignKey} = {$foreignTable}.{$foreignKey}";
-            }
+            $tables[$foreignTable] = "LEFT JOIN {$localTable}.{$localKeyDb} = {$foreignTable}.{$foreignKeyDb}";               
 
-            $fields = array_merge($fields, $classRef->orm['selectMap']);
+            $fields = array_merge($this->orm['selectMap'], $classRef->orm['selectMap']);
             
-            // We can only have a single HAS_MANY (SQL LEFT JOIN) in our primary query.  If we have additional HAS_MANY
-            // relationships, we need to make separate queries for each of those.
+            // We can only have a single MANY (SQL LEFT JOIN) in our primary query.  If we have
+            // additional MANY relationships, we need to make separate queries for each of those.
             if ($hasMany == 0)
             {
                $this->primaryQuery($tables, $fields);
@@ -1361,33 +1754,40 @@ abstract class ORM
             }
          }
          
-         // Has many....
-         else if ($relDetail['type'] == ORM_HAS_AND_BELONGS_TO_MANY)
-         {
-            $fields = $this->orm['selectMap'];
+         // This relationship requires a link table.  The local key and the foreign key must both be
+         // present in the link table.  We get map the db fields from each respective model.
+         else if ($relDetail['type'] == ORM_MANY_TO_MANY)
+         {            
             $classRef = $this->orm['classes'][$class];
-            $localTable = $this->getTableDbName();
-            $foreignTable = $classRef->getTableDbName();
             $linkTable = $relDetail['linkTable']; 
             $expectedRows = 0; // We probably will have multiple rows with this relation
+            
+            list($localKey, $foreignKey) = explode(":", $relDetail['key']);
 
-            $primaryKey = $this->ormGetPrimaryKeyField();
-            $primaryKeyDb = $this->ormGetPrimaryKeyDbField();
-            $foreignKey = $classRef->ormGetPrimaryKeyField();
-            $foreignKeyDb = $classRef->ormGetPrimaryKeyDbField();
-            $fields = array_merge($fields, $classRef->orm['selectMap']);
+            // Get local table and key from map
+            $fieldArrLocal = explode(".", $this->orm['objectFieldMap'][$localKey]);
+            $localKeyDb = array_pop($fieldArrLocal);
+            $localTable = implode(".", $fieldArrLocal); 
 
-            // Set this to that the tuple conversion that happens after this works.
-            //$this->orm['relations'][$class]['key'] = $foreignKey;
+            // Get foreign table and key from map
+            $fieldArrForeign = explode(".", $classRef->orm['objectFieldMap'][$foreignKey]);
+            $foreignKeyDb = array_pop($fieldArrForeign);
+            $foreignTable = implode(".", $fieldArrForeign); 
 
-            // First JOIN the link table based on our primary key.            
-            $tables[$linkTable] = "LEFT JOIN {$localTable}.{$primaryKeyDb} = {$linkTable}.{$primaryKeyDb}";
+            // First JOIN the link table and get rows from there where our primary key = foreign key
+            // of the same name.  This is one side of the many to many relationship.
+            $tables[$linkTable] = "LEFT JOIN {$localTable}.{$localKeyDb} = {$linkTable}.{$localKeyDb}";
 
-            // Secondly JOIN the foreign table based on the other key in the link table, which is the primary key of the foreign table.
+            // Secondly JOIN the foreign table, or the one that has a ORM model and the one that we want
+            // to save in our model, based on the other key in the link table, which is the primary key
+            // of the foreign table/object.
             $tables[$foreignTable] = "LEFT JOIN {$linkTable}.{$foreignKeyDb} = {$foreignTable}.{$foreignKeyDb}";
 
-            // We can only have a single HAS_MANY (SQL LEFT JOIN) in our primary query.  If we have additional HAS_MANY
-            // relationships, we need to make separate queries for each of those.
+            $fields = array_merge($this->orm['selectMap'], $classRef->orm['selectMap']);
+
+            // We can only have a single MANY, (SQL LEFT JOIN) in our primary query.  The only
+            // exception is this one, where a many to many needs two left joins.  If we have additional
+            // MANY relationships, we need to make separate queries for each of those.
             if ($hasMany == 0)
             {
                $this->primaryQuery($tables, $fields);
@@ -1431,15 +1831,16 @@ abstract class ORM
       // Empty the query queue.
       $this->orm['queryQueue'] = array();
 
-      // We could return TRUE/FALSE for a load() method, or data for a find() method...      
+      // We could return true/false for a load() method, or data for a find() method...      
       return $ret;
    }
 
 
 
-   // Convert tuples to objects.  Once the queries are built and executed with ormLoad(), execution is handed
-   // off to us to actually convert the SQL flat resultset into a series of objects.
-   // @return (array)   Array of objects created for resultset, or TRUE if loading locally.
+   // This is part of ormLoad()
+   // Convert tuples to objects.  Once the queries are built and executed with ormLoad(), execution
+   // is handed off to us to actually convert the SQL flat resultset into a series of objects.
+   // @return array Array of objects created for resultset, or true if loading locally.
    private function ormConvertTuplesToObjects($type=ORM_THIS_OBJECT)
    {
       $objects = array();
@@ -1450,14 +1851,14 @@ abstract class ORM
       {
          if (!$this->orm['reader']->doSelect($queue['tables'], $queue['fields'], $queue['conditions'], $queue['order'], $queue['limit']))
          {
-            return FALSE;
+            return false;
          }
 	 
          $numRows = $this->orm['reader']->numRows();
 	 
          if ($numRows == 0)
          {
-            return FALSE;
+            return false;
          }
 	 
          // Set data locally for the load() methods in current object.
@@ -1468,19 +1869,20 @@ abstract class ORM
                $this->ormConvertTupleThis($type, $row);   
             }
    
-            // Just return TRUE
-            $objects = TRUE;
+            // Just return true
+            $objects = true;
          }
-
-         // Make new object(s) and return them for the various find() methods.  Store each object in an index array
-         // so that we can go back and populate any relation data into the object as we iterate through the different resultsets.
+         
+         // Make new object(s) and return them for the various find() methods.  Store each object in
+         // an index array so that we can go back and populate any relation data into the object as
+         // we iterate through the different resultsets.
          if ($type == ORM_NEW_OBJECT)
          {
             while ($row = $this->orm['reader']->fetchArray())
-            {
+            {               
                $key = $this->getTableName() . "_" . $this->ormGetPrimaryKeyField();
                $uniqueValue = $row[$key];
-      
+               
                if (isset($index[$uniqueValue]))
                {
                   $index[$uniqueValue] = $this->ormConvertTupleNew($type, $row, $index[$uniqueValue]);
@@ -1501,6 +1903,7 @@ abstract class ORM
    }
 
 
+   // This is part of ormLoad()
    // This method sets the data in the current object with the resultset.  This happens when the user
    // calls a load() method, which is much easier than the find() methods.  Since JOINS have duplicate
    // results, we wind up setting the data in $this multiple times because of the necessary iterations
@@ -1518,10 +1921,11 @@ abstract class ORM
       foreach ($resultset as $key => $value)
       {
          list($resClass, $resParam) = explode("_", $key, 2);
-         if (strtolower($resClass) == $shortClassName) $this->$resParam = $value;
+         if (strtolower($resClass) == $shortClassName) $this->set($resParam, $value);
       }
 
-      $this->orm['dbSync'] = TRUE;
+      $this->orm['dbSync'] = true;
+      $this->orm['isDirty'] = false;
 
       // Set values in related objects in $this
       foreach ($this->orm['relations'] as $class => $detail)
@@ -1531,10 +1935,13 @@ abstract class ORM
          if ($detail['type'] == ORM_HAS_ONE || $detail['type'] == ORM_BELONGS_TO || $detail['type'] == ORM_MIGHT_HAVE_ONE)
          {
             $objRef = $this->{$shortClass};
-            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === FALSE) continue; }
+            $objRef->setQueryBuilderReader($this->getReader());
+            $objRef->setQueryBuilderWriter($this->getWriter());
+            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $this->setForeignKeyValue($detail, $objRef);
-            $objRef->orm['dbSync'] = TRUE;            
+            $objRef->orm['dbSync'] = true;
+            $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             unset($objRef);
          }
@@ -1542,22 +1949,28 @@ abstract class ORM
          if ($detail['type'] == ORM_HAS_MANY)
          {
             $objRef = new $class;
-            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === FALSE) continue; }
+            $objRef->setQueryBuilderReader($this->getReader());
+            $objRef->setQueryBuilderWriter($this->getWriter());
+            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $this->setForeignKeyValue($detail, $objRef);
-            $objRef->orm['dbSync'] = TRUE;
+            $objRef->orm['dbSync'] = true;
+            $objRef->orm['isDirty'] = false;
             if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             //unset($objRef);
          }
 
-         if ($detail['type'] == ORM_HAS_AND_BELONGS_TO_MANY)
+         if ($detail['type'] == ORM_MANY_TO_MANY)
          {
             $objRef = new $class;
-            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === FALSE) continue; }
+            $objRef->setQueryBuilderReader($this->getReader());
+            $objRef->setQueryBuilderWriter($this->getWriter());
+            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $this->setForeignKeyValue($detail, $objRef);
-            $objRef->orm['dbSync'] = TRUE;
+            $objRef->orm['dbSync'] = true;
+            $objRef->orm['isDirty'] = false;
             if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             unset($objRef);
@@ -1568,6 +1981,7 @@ abstract class ORM
    }
 
 
+   // This is part of ormLoad()
    // Convert tuples into objects.  This is performed when the user uses a find method, so we have
    // to create a resultset of new objects.
    //
@@ -1583,20 +1997,23 @@ abstract class ORM
       $className = strtolower(get_class($this));
       $shortClassName = $this->getShortClassName($className);
 
-      if (method_exists($newObj, "onBeforeLoad")) { if ($newObj->onBeforeLoad($type) === FALSE) continue; }
+      if (method_exists($newObj, "onBeforeLoad")) { if ($newObj->onBeforeLoad($type) === false) continue; }
 
       // Create the new object and populate the object variables with data.  We only do this once.
       if ($newObj == null)
       {
          $newObj = new $className;
+         $newObj->setQueryBuilderReader($this->getReader());
+         $newObj->setQueryBuilderWriter($this->getWriter());
          $newObj->setTableDbName($this->getTableDbName());
-         $newObj->orm['dbSync'] = TRUE;
+         $newObj->orm['dbSync'] = true;
+         $newObj->orm['isDirty'] = false;
          
          // Set values in newObj
          foreach ($resultset as $key => $value)
          {
             list($resClass, $resParam) = explode("_", $key, 2);
-            if (strtolower($resClass) == strtolower($this->getShortClassName(get_class($newObj)))) $newObj->{$resParam} = $value;
+            if (strtolower($resClass) == strtolower($this->getShortClassName(get_class($newObj)))) $newObj->set($resParam, $value);
          }         
       }
 
@@ -1608,9 +2025,13 @@ abstract class ORM
          if ($detail['type'] == ORM_HAS_ONE || $detail['type'] == ORM_BELONGS_TO || $detail['type'] == ORM_MIGHT_HAVE_ONE)
          {
             $objRef = new $class;
-            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === FALSE) continue; }
+            $objRef->setQueryBuilderReader($this->getReader());
+            $objRef->setQueryBuilderWriter($this->getWriter());
+            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $newObj->setForeignKeyValue($detail, $objRef);
+            $objRef->orm['dbSync'] = true;
+            $objRef->orm['isDirty'] = false;
             if ($numFields > 0) $newObj->{$shortClass} = $objRef;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
          }
@@ -1618,37 +2039,45 @@ abstract class ORM
          if ($detail['type'] == ORM_HAS_MANY)
          {
             $objRef = new $class;
-            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === FALSE) continue; }
+            $objRef->setQueryBuilderReader($this->getReader());
+            $objRef->setQueryBuilderWriter($this->getWriter());
+            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $newObj->setForeignKeyValue($detail, $objRef);
+
             if ($numFields > 0)
             {
-               // We need to get a reference, modify it, then re-set it.  I think it has to do with __set() being employed.
-               // Hopefully this doesn't create any memory leaks...
+               // We need to get a reference, modify it, then re-set it.
                $ref = $newObj->{$shortClass};
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
             }
             
+            $objRef->orm['dbSync'] = true;
+            $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             unset($objRef);
          }
 
-         if ($detail['type'] == ORM_HAS_AND_BELONGS_TO_MANY)
+         if ($detail['type'] == ORM_MANY_TO_MANY)
          {
             $objRef = new $class;
-            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === FALSE) continue; }
+            $objRef->setQueryBuilderReader($this->getReader());
+            $objRef->setQueryBuilderWriter($this->getWriter());
+            if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $newObj->setForeignKeyValue($detail, $objRef);
+            
             if ($numFields > 0)
             {
-               // We need to get a reference, modify it, then re-set it.  I think it has to do with __set() being employed.
-               // Hopefully this doesn't create any memory leaks...
+               // We need to get a reference, modify it, then re-set it.
                $ref = $newObj->{$shortClass};
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
             }
 
+            $objRef->orm['dbSync'] = true;
+            $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             unset($objRef);
          }
@@ -1664,8 +2093,8 @@ abstract class ORM
    }
 
 
+   // This is part of ormLoad()
    // Add/Modify the primary query paramaters.
-   //
    // NOTE: Be sure to only pass conditions one time.  array_merge() won't properly merge duplicate conditions because they
    // are numerically indexed...
    private function primaryQuery($tables, $fields=array(), $conditions=array(), $order=NULL, $limit=NULL)
@@ -1698,18 +2127,20 @@ abstract class ORM
    }
 
 
+   // This is part of ormLoad()
    // Add an additional query to the db query queue.  Pass in the normal arguments required for the doSelect() method...
    private function additionalQuery($tables, $fields, $conditions, $order, $limit)
    {
          $newQueue['tables'] = $tables;
          $newQueue['fields'] = $fields;
          $newQueue['conditions'] = $conditions;
-         $newQueue['order'] = NULL;
-         $newQueue['limit'] = NULL;
+         $newQueue['order'] = null;
+         $newQueue['limit'] = null;
          array_push($this->orm['queryQueue'], $newQueue);
    }
 
 
+   // This is part of ormLoad()
    // Populate the object variables with database values.  Return the number of fields populated.
    private function ormPopulateFields($resultset, $shortClassName, $objRef)
    {
@@ -1726,11 +2157,13 @@ abstract class ORM
          }
       }
 
-      $objRef->orm['dbSync'] = TRUE;
+      $objRef->orm['dbSync'] = true;
+      $objRef->orm['isDirty'] = false;
       return $numFields;
    }
 
 
+   // This is part of ormLoad()
    private function ormSetForeignKeyValue($detail, $objRef)
    {
       if (strpos($detail['key'], ":", 1))
@@ -1746,12 +2179,12 @@ abstract class ORM
       list($table, $key) = explode(".", $this->orm['objectFieldMap'][$foreignKey]);
       $foreignKeyValue = $this->$localKey;
 
-      /* Set conditions array in related object to include foreign key = local key value */
+      // Set conditions array in related object to include foreign key = local key value
       $conditions = array();
       $conditions[] = $key . " = " . $foreignKeyValue;
       $objRef->ormSetAutoConditions($conditions);
 
-      /* Set foreign key property in related object to my current value */
+      // Set foreign key property in related object to my current value
       $objKey = $objRef->orm['fieldMap'][$key];
       $objRef->$objKey = $foreignKeyValue;
    }
@@ -1831,8 +2264,5 @@ abstract class ORM
    }
    
    
-/* End ORM */
+// end ORM
 }
-
-
-?>

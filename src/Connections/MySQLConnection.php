@@ -12,6 +12,7 @@
 //
 
 namespace Indicium\Connections;
+
 use Indicium\Connections\Connection;
 
 class MySQLConnection extends Connection
@@ -22,12 +23,7 @@ class MySQLConnection extends Connection
    * @param hostname (string)   Hostname of database server
    * @param login    (strring)  Login name to authenticate to database. server.
    * @param password (string)   Password for database server.
-   * @param args     (array)    Optional array of arguments.
-   *
-   * Optional arguments are:
-   *  newlink      - PHP will reuse connections.  Set this to 1 to guarantee a new connection.
-   *  persistent   - Use persistent connections.
-   *  force_escape - Something.
+   * @param args     (array)    Optional array of arguments.  Not used for now.  Placeholder.
    * 
    */
   
@@ -37,17 +33,6 @@ class MySQLConnection extends Connection
       $this->login     = $login;
       $this->password  = $password;
       $this->database  = $database;
-
-      if (isset($args['persistent']))
-        $this->persistent = TRUE;
-      else
-        $this->persistent = FALSE;
-
-      if (isset($args['newlink']))
-        $this->newlink = TRUE;
-      else
-        $this->newlink = FALSE;
-
       $this->connect();
    }
 
@@ -57,19 +42,9 @@ class MySQLConnection extends Connection
 
    public function connect()
    {
-      if ($this->persistent)
-        $handle = mysql_pconnect($this->server, $this->login, $this->password);
-      else
-        $handle = mysql_connect($this->server, $this->login, $this->password, $this->newlink);
+      $handle = mysqli_connect($this->server, $this->login, $this->password, $this->database);
 
       if ($handle == FALSE)
-      {
-         return FALSE;
-      }
-
-      $res = mysql_select_db($this->database, $handle);
-
-      if ($res == FALSE)
       {
          return FALSE;
       }
@@ -86,7 +61,7 @@ class MySQLConnection extends Connection
       if ($this->checkConnection())
       {
          $handle = $this->getHandle();
-         mysql_close($handle);
+         mysqli_close($handle);
 
          $this->dbhandle = NULL;
          $this->isconnected = 0;

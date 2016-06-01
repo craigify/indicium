@@ -12,10 +12,12 @@ namespace Indicium;
 class DatabaseFactory
 {
 	private $autoload;
+	private $logger;
 
 	
 	function __construct()
 	{
+		$this->logger = null;
 		$this->autoload = true;
 	}
 
@@ -33,6 +35,15 @@ class DatabaseFactory
 		$this->autoload = $val;
 	}
 
+	
+	// Inject a reference to a PSR-3 compatible logger.  When this is set, all query builders and
+	// possibly, helper objects, will have the logger object automatically injected.
+	// @param object $logger Logger object
+	public function setLogger($logger)
+	{
+		$this->logger = $logger;
+	}
+	
 	
 	// Create a new Connection and QueryBuilder object, ready to use.  Besides $type, which must be
 	// specified so this method knows what kind of connection and query builder to create, all other
@@ -53,6 +64,12 @@ class DatabaseFactory
 		
 		$connection = $this->newConnection($type, $args);
 		$queryBuilder = $this->newQueryBuilder($type, $connection);
+		
+		if ($this->logger)
+		{
+			$connection->setLogger($this->logger);
+			$queryBuilder->setLogger($this->logger);			
+		}
 		
 		return $queryBuilder;
 	}

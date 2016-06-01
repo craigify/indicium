@@ -5,10 +5,13 @@
 //
 
 namespace Indicium\QueryBuilders;
+
 use Indicium\Connections\MySQLConnection;
+use Indicium\Exceptions\QueryBuilderException;
 
 class MySQLQueryBuilder extends QueryBuilder
 {
+   protected $lastQuery;
 
    // Constructor expects a MySQLConnection object that is ready to be used  
    function __construct(MySQLConnection $connection)
@@ -16,71 +19,105 @@ class MySQLQueryBuilder extends QueryBuilder
 	  parent::__construct();
 	  $this->connection = $connection;
    }
-  
 
 
-  /* Query the database and register the result resource internally.
-   * @param (string)    $query  SQL query to execute.
-   * @return (resource) Result resource, if you want to use it for something.
-   */
-
+   // Query the database and register the result resource internally.
+   // @param string $query SQL query to execute.
+   // @return resource Result resource, if you want to use it for something.
    public function query($query)
-   {
+   {	  
       if ($this->getConnection()->checkConnection() == FALSE)
       {
          return FALSE;
       }
 
-      if ($this->debugMode == TRUE)
+      if ($this->debugMode && $this->logger)
       {
-		 var_dump($query);
-         trigger_error($query, E_USER_NOTICE);
+		 $this->logger->debug($query);
       }
 
-      $handle = $this->getConnection()->getHandle();
-      $res = mysql_query($query, $handle);
+	  $this->lastQuery = $query;
+      $res = mysqli_query($this->getConnection()->getHandle(), $query);
+	  
+	  if ($res === false)
+	  {
+		 $msg = "Query failed: " . mysqli_error($this->getConnection()->getHandle());
+
+         if ($this->debugMode === true && $this->logger)
+         {
+			$this->logger->error($msg);
+		 }
+
+		 $e = new QueryBuilderException($msg);
+		 $e->setQuery($query);
+		 throw $e;
+	  }
+	  
       $this->registerResult($res);
       return $res;
    }
 
-
-
-   public function fetchRow()
+   
+   public function beginTransaction()
    {
-      $row = mysql_fetch_row($this->getResult());
-      return $row;
+	  return mysqli_begin_transaction($this->getConnection()->getHandle());  
    }
 
+   
+   public function commitTransaction()
+   {
+	  return mysqli_commit($this->getConnection()->getHandle());
+   }
+   
+   
+   public function rollbackTransaction()
+   {
+	  return mysqli_rollback($this->getConnection()->getHandle());
+   }
+
+   
+   public function fetchRow()
+   {
+      $row = mysqli_fetch_row($this->getResult());
+      return $row;
+   }
 
 
    public function fetchArray()
    {
-      $row = mysql_fetch_assoc($this->getResult());
+      $row = mysqli_fetch_assoc($this->getResult());
       return $row;
    }
 
 
-
    public function fetchObject()
    {
-      $obj = mysql_fetch_object($this->getResult());
+      $obj = mysqli_fetch_object($this->getResult());
       return $obj;
    }
-
 
 
    public function fetchItem($key)
    {
       if (empty($key))
       {
-         return FALSE;
+         throw new \InvalidArgumentException("Key cannot be empty");
       }
 
       $res = $this->getResult();
       $row = $this->fetchArray();
-      return $row[$key];
+	  
+	  if (isset($row[$key]))
+	  {
+         return $row[$key];		 
+	  }
+	  else
+	  {
+		 $e = new QueryBuilderException("fetchItem did not find key '{$key}' in the first result row.");
+		 $e->setQuery($this->lastQuery);
+		 throw $e;
+	  }
    }
-
 
 
    public function fetchResults($key=NULL)
@@ -108,37 +145,41 @@ class MySQLQueryBuilder extends QueryBuilder
    }
 
 
-
+   // Deprecated
    public function affectedRows()
    {
-      $aff_rows = @mysql_affected_rows($this->getConnection()->getHandle());
+      $aff_rows = @mysqli_affected_rows($this->getConnection()->getHandle());
       return $aff_rows;
    }
 
 
-
+   // Deprecated
    public function numRows()
    {
-      $num_rows = @mysql_num_rows($this->getResult());
+      $num_rows = @mysqli_num_rows($this->getResult());
       return $num_rows;
    }
-
+   
+   
+   // Return number of rows for last operation of any kind.
+   public function countRows()
+   {
+      $aff_rows = @mysqli_affected_rows($this->getConnection()->getHandle());
+      return $num_rows;	  
+   }
 
 
    public function lastInsertId()
    {
       $query = "SELECT LAST_INSERT_ID()";
-      $res = @mysql_query($query, $this->getConnection()->getHandle());
-      $row = @mysql_fetch_row($res);
+      $res = @mysqli_query($this->getConnection()->getHandle(), $query);
+      $row = @mysqli_fetch_row($res);
       return $row[0];
    }
 
 
-
-  /* Generate an 'INSERT ... ON DUPLICATE KEY UPDATE' SQL query and execute it.  I am pretty sure this will only
-   * work with mysql (and on versions >= 4.1)
-   */
-
+   // Generate an 'INSERT ... ON DUPLICATE KEY UPDATE' SQL query and execute it.
+   // @throws QueryBuilderException
    public function doDuplicateKeyInsert($table, $inputVars)
    {
       $fields_insert = "";
@@ -147,26 +188,24 @@ class MySQLQueryBuilder extends QueryBuilder
 
       if (!is_array($inputVars) || count($inputVars) < 1)
       {
-         error(E_WARNING, "doDuplicateKeyInsert() expects an array with key=value pairs as its second argument.");
-         return FALSE;
+		 throw new QueryBuilderException("doDuplicateKeyInsert() expects an array with key=value pairs as its second argument.");
       }
 
       foreach ($inputVars as $field => $value)
       {
          $value_converted = $this->convertValueToSQL($value);
-         $fields_insert .= "$field, ";
-         $fields_update .= "$field = $value_converted, ";
-         $values .= "$value_converted, ";
+         $fields_insert .= "{$field}, ";
+         $fields_update .= "{$field} = {$value_converted}, ";
+         $values .= "{$value_converted}, ";
       }
-
-      /* remove trailing comma and space */
+	  
+      // remove trailing comma and space 
       $fields_insert = substr($fields_insert, 0, -2);
       $fields_update = substr($fields_update, 0, -2);
       $values = substr($values, 0, -2);
 
       $query = "INSERT INTO {$table} ({$fields_insert}) VALUES ({$values})
-                ON DUPLICATE KEY UPDATE
-                {$fields_update}
+                ON DUPLICATE KEY UPDATE {$fields_update}
                ";
 
       $res = $this->query($query);
@@ -175,10 +214,8 @@ class MySQLQueryBuilder extends QueryBuilder
    }
 
 
-
-  /* Construct and execute an INSERT IGNORE statement.
-   */
-
+   // Construct and execute an INSERT IGNORE statement.
+   // @throws QueryBuilderException
    public function doInsertIgnore($table, $inputVars=array())
    {
       $fields = "";
@@ -186,13 +223,12 @@ class MySQLQueryBuilder extends QueryBuilder
 
       if (!is_array($inputVars) || count($inputVars) < 1)
       {
-         error(E_WARNING, "doInsert() expects an array with key=value pairs as its second argument.");
-         return FALSE;
+		 throw new QueryBuilderException("doInsertIgnore() expects an array with key=value pairs as its second argument.");
       }
 
       foreach ($inputVars as $field => $value)
       {
-         $fields .= "$field, ";
+         $fields .= "{$field}, ";
          $values .= $this->convertValueToSQL($value) . ", ";
       }
 
@@ -207,62 +243,12 @@ class MySQLQueryBuilder extends QueryBuilder
    }
 
 
-
-  /* MYSQL's method of making unique inserts is INSERT IGNORE.  Use it.
-   */
-
+   // MYSQL's method of making unique inserts is INSERT IGNORE.  Use it.
    public function doUniqueInsert($table, $inputVars=array())
    {
       return $this->doInsertIgnore($table, $inputVars);
    }
 
 
-
-  /* Establish a connection to the MySQL server and select appropriate database.
-   */
-
-   protected function connect()
-   {
-      if ($this->persistent)
-        $handle = mysql_pconnect($this->server, $this->login, $this->password);
-      else
-        $handle = mysql_connect($this->server, $this->login, $this->password, $this->newlink);
-
-      if ($handle == FALSE)
-      {
-         return FALSE;
-      }
-
-      $res = mysql_select_db($this->database, $handle);
-
-      if ($res == FALSE)
-      {
-         return FALSE;
-      }
-
-      $this->registerHandle($handle);
-
-   return TRUE;
-   }
-   
-   
-   // Close the database connection.  This will render the connection in-operative (obviously).
-   public function close()
-   {
-      if ($this->checkConnection())
-      {
-         $handle = $this->getConnection()->getHandle();
-         mysql_close($handle);
-
-         $this->dbhandle = NULL;
-         $this->isconnected = 0;
-      }
-   }
-   
-   
-/* end mysql class */
+// end   
 }
-
-
-
-?>

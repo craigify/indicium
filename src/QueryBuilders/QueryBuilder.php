@@ -15,8 +15,7 @@
 // fetchRow()            Fetch numerical index of result data.
 // fetchArray()          Fetch associative index of result data in key=> value pairs.
 // fetchResults()        Fetch entire resultset as 2D array.  Can be ordered.
-// affectedRows()        Returns affected rows.
-// numRows()             Returns num rows.
+// countRows()           Returns the number of rows affected by the last operation.
 // lastInsertId()        Returns last last auto_increment, identity, etc...
 // queryFetchRow()       Query the database and fetch one row of the result as a numeric array.
 //                       Use when you only want to retrieve a single row of a resultset, or if you
@@ -40,21 +39,25 @@
 
 namespace Indicium\QueryBuilders;
 
+use Indicium\Exceptions\QueryBuilderException;
+
 abstract class QueryBuilder
 {
    protected $connection;
    protected $dbresult;
    protected $forceEscape;
    protected $debugMode;
+   protected $logger;
 
 
    function __construct()
    {
-      $this->debugMode = FALSE;
-      $this->forceEscape = FALSE;
+      $this->debugMode = false;
+      $this->forceEscape = false;
    }
+   
 
-
+   
    // Send a query to the DB and return result.  Save result internally.
    // @param (string)  $query  SQL query to execute.
    //@return (result) Return a result resource, or FALSE if error.   
@@ -101,18 +104,11 @@ abstract class QueryBuilder
 
 
 
-  /* Return the number of rows by the last INSERT, UPDATE or DELETE query.
+  /* Return the number of rows by the last operation.
    * @return (int) number of rows.
    */
 
-   abstract public function affectedRows();
-
-
-  /* Return the numbers of rows affected by the last SELECT query.
-   * @return (int) number of rows.
-   */
-
-   abstract public function numRows();
+   abstract public function countRows();
 
 
   /* Return the ID of the last INSERT (AUTO_INCREMENT in MySQL and @@IDENTITY in MSSQL)
@@ -141,67 +137,57 @@ abstract class QueryBuilder
 
 
 
-  /* Query and fetchResults() in one swoop.
-   */
-
+   // Inject a PSR-3 compatible logger.
+   // @param object $logger Logger object
+   public function setLogger($logger)
+   {
+      $this->logger = $logger;
+   }
+   
+   
+   public function setDebugMode($mode)
+   {
+      $this->debugMode = $mode;
+   }
+   
+   
+   // Query and fetchResults() in one swoop.
    public function queryFetchRow($query)
    {
-      if (!$this->query($query))
-        return FALSE;
-
-   return $this->fetchRow();
+      $this->query($query);
+      return $this->fetchRow();
    }
 
 
-
-  /* Query and fetchArray() in one swoop.
-   */
-
+   // Query and fetchArray() in one swoop.
    public function queryFetchArray($query)
    {
-      if (!$this->query($query))
-        return FALSE;
-
-   return $this->fetchArray();
+      $this->query($query);
+      return $this->fetchArray();
    }
 
 
-
-  /* Query and fetchObject() in one swoop.
-   */
-
+   //Query and fetchObject() in one swoop.
    public function queryFetchObject($query)
    {
-      if (!$this->query($query))
-        return FALSE;
-
-   return $this->fetchObject();
+      $this->query($query);
+      return $this->fetchObject();
    }
 
 
-
-  /* Query and fetchItem() in one swoop.
-   */
-
+   // Query and fetchItem() in one swoop.
    public function queryFetchItem($query, $key)
    {
-      if (!$this->query($query))
-        return FALSE;
-
-   return $this->fetchItem($key);
+      $this->query($query);
+      return $this->fetchItem($key);
    }
 
 
-
-  /* Query and fetchResults() in one swoop.
-   */
-
+   // Query and fetchResults() in one swoop.
    public function queryFetchResults($query, $key=NULL)
    {
-      if (!$this->query($query))
-        return FALSE;
-
-   return $this->fetchResults($key);
+      $this->query($query);
+      return $this->fetchResults($key);
    }
 
 
@@ -311,75 +297,43 @@ abstract class QueryBuilder
    }
 
 
-
-  /* I think the following are pretty self explainatory.  One-swoop methods that mirror the queryFetch...() methods.
-   */
-
+   // I think the following are pretty self explainatory.  One-swoop methods that mirror the queryFetch methods.
    public function doSelectFetchArray($tables=array(), $fields=array(), $conditions=array(), $order="", $limit="")
    {
-      if (!$this->doSelect($tables, $fields, $conditions, $order, $limit))
-      {
-         return FALSE;
-      }
-
+      $this->doSelect($tables, $fields, $conditions, $order, $limit);
       return $this->fetchArray();
    }
 
 
-
    public function doSelectFetchObject($tables=array(), $fields=array(), $conditions=array(), $order="", $limit="")
    {
-      if (!$this->doSelect($tables, $fields, $conditions, $order, $limit))
-      {
-         return FALSE;
-      }
-
+      $this->doSelect($tables, $fields, $conditions, $order, $limit);
       return $this->fetchObject();
    }
 
 
-
    public function doSelectFetchRow($tables=array(), $fields=array(), $conditions=array(), $order="", $limit="")
    {
-      if (!$this->doSelect($tables, $fields, $conditions, $order, $limit))
-      {
-         return FALSE;
-      }
-
+      $this->doSelect($tables, $fields, $conditions, $order, $limit);
       return $this->fetchRow();
    }
 
 
-
    public function doSelectFetchResults($tables=array(), $fields=array(), $conditions=array(), $order="", $limit="")
    {
-      if (!$this->doSelect($tables, $fields, $conditions, $order, $limit))
-      {
-         return FALSE;
-      }
-
+      $this->doSelect($tables, $fields, $conditions, $order, $limit);
       return $this->fetchResults();
    }
 
 
-
    public function doSelectFetchItem($tables=array(), $key, $conditions=array())
    {
-      if (!$this->doSelect($tables, array($key), $conditions))
-      {
-         return FALSE;
-      }
-
+      $this->doSelect($tables, array($key), $conditions);
       return $this->fetchItem($key);
    }
 
 
-
-  /* Construct a SQL INSERT statement and execute it.  This should work with any compliant SQL92 engine.
-   *
-   * Returns whatever the the database class query() method that you are using returns, or FALSE on error.
-   */
-
+   // Construct a SQL INSERT statement and execute it.  This should work with any compliant SQL92 engine.
    public function doInsert($table, $inputVars=array())
    {
       $fields = "";
@@ -387,7 +341,7 @@ abstract class QueryBuilder
 
       if (!is_array($inputVars) || count($inputVars) < 1)
       {
-         return FALSE;
+		 throw new QueryBuilderException("doInsert() expects second argument to be an array");
       }
 
       foreach ($inputVars as $field => $value)
@@ -396,11 +350,11 @@ abstract class QueryBuilder
          $values .= $this->convertValueToSQL($value) . ", ";
       }
 
-      /* remove trailing comma and space */
+      // remove trailing comma and space
       $fields = substr($fields, 0, -2);
       $values = substr($values, 0, -2);
 
-      $query = "INSERT INTO $table ($fields) VALUES ($values)";
+      $query = "INSERT INTO {$table} ({$fields}) VALUES ({$values})";
       $res = $this->query($query);
 
    return $res;
@@ -408,16 +362,14 @@ abstract class QueryBuilder
 
 
 
-  /* Construct a SQL UPDATE statement and execute it.
-   */
-
+   // Construct a SQL UPDATE statement and execute it.
    public function doUpdate($table, $inputVars, $conditions=array(), $limit="")
    {
       $fields = "";
 
       if (!is_array($inputVars) || count($inputVars) < 1)
       {
-         return FALSE;
+		 throw new QueryBuilderException("doUpdate() expects second argument to be an array");
       }
 
       foreach ($inputVars as $field => $value)
@@ -425,7 +377,7 @@ abstract class QueryBuilder
          $fields .= "`{$field}` = " . $this->convertValueToSQL($value) . ", ";
       }
 
-      /* remove trailing comma and space */
+      // remove trailing comma and space
       $fields = substr($fields, 0, -2);
 
       $query = "UPDATE {$table} SET {$fields} " . $this->generateWhere($conditions) . " " . $limit;
@@ -710,11 +662,5 @@ abstract class QueryBuilder
    }
 
 
-
-
-/* end MrSQL class */
+// end class
 }
-
-
-
-?>
