@@ -21,7 +21,7 @@ abstract class Connection
    
    // Inject a PSR-3 compatible logger.
    // @param object $logger Logger object
-   public function setLogger()
+   public function setLogger($logger)
    {
       $this->logger = $logger;
    }
