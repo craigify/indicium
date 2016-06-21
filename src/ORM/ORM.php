@@ -97,6 +97,7 @@ abstract class ORM
       $this->orm['conditions'] = array(); // conditions used every time.
       $this->orm['lastConditions'] = array(); // last conditions array for previous query.
       $this->orm['relations'] = array();
+      $this->orm['classes'] = array();
       $this->orm['queryQueue'] = array();
       $this->orm['dbSync'] = false;
       $this->orm['isDirty'] = false;
@@ -121,6 +122,11 @@ abstract class ORM
    public function setQueryBuilderReader($queryBuilder)
    {
       $this->orm['reader'] = $queryBuilder;
+
+      foreach ($this->orm['classes'] as $obj)
+      {
+         $obj->setQueryBuilderReader($queryBuilder);
+      }
    }
 
 
@@ -129,6 +135,11 @@ abstract class ORM
    public function setQueryBuilderWriter($queryBuilder)
    {
       $this->orm['writer'] = $queryBuilder;
+
+      foreach ($this->orm['classes'] as $obj)
+      {
+         $obj->setQueryBuilderWriter($queryBuilder);
+      }
    }
    
    
