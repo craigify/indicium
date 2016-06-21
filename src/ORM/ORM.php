@@ -1046,7 +1046,7 @@ abstract class ORM
       // If the value is the same as the existing value, don't mark the ORM object as dirty since
       // nothing changed. No events are executed, and this will not prompt any SQL statements to
       // be executed, etc..            
-      if ($objValue == $this->orm['data'][$objField])
+      if (isset($this->orm['data'][$objField]) && $this->orm['data'][$objField] == $objValue)
       {
          return false;
       }
