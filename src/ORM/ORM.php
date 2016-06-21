@@ -69,8 +69,7 @@ define("ORM_HAS_ONE",        1001);    // 1 to 1 mapping with INNER JOIN
 define("ORM_MIGHT_HAVE_ONE", 1002);    // 1 to 1 mapping with LEFT JOIN
 define("ORM_BELONGS_TO",     1003);    // 1 to 1 mapping with INNER JOIN.
 define("ORM_HAS_MANY",       1007);    // 1 to many mapping
-define("ORM_HAS_AND_BELONGS_TO_MANY", 1009);
-define("ORM_HABTM",          1009);
+define("ORM_MANY_TO_MANY",   1009);    // many to many relationship with link table
 
 // Other constants
 define("ORM_NEW_OBJECT",     2000);
