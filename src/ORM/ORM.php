@@ -339,51 +339,51 @@ abstract class ORM
             $this->ormSet($fieldKey, $fieldValue);
             continue;
          }
-         
+                  
          // If key is a related object, we first need to find the matching related object by iterating
-         // through our relations array.
+         // through our relations array until we find a match.
          foreach ($this->orm['relations'] as $longClassName => $relation)
-         {
-            // Check for some consistency in the input fields and relations defintion. The related
-            // object in the fields (input) data must represent the relation type.  So if we're
-            // Company, and we have many Employee objects, we expect $key to be an numeric array here,
-            // presumably of Employee object data.  If we just have one Employee object and not an
-            // array, then our input/fields data does not match our ORM definition.  This would be
-            // an irreconcilable mismatch and we would wind up with an invalid object state.
-            
-            // If the input is a numeric array, we consider that to be an array of objects, or it
-            // could be an array of assoc arrays.  Regardless, this signifies to us that the input
-            // field represents a 1 to many relationship.
-            if (is_array($fieldValue) && !$this->ormIsAssoc($fieldValue)
-               && $relation['type'] != ORM_HAS_MANY
-               && $relation['type'] != ORM_MANY_TO_MANY)
-            {
-               throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition");
-            }
-            
-            // If the input field value is an associtive array (not numeric), is the same as an object,
-            // and also represents 1=1 relationship.
-            if (is_array($fieldValue) && $this->ormIsAssoc($fieldValue)
-                && $relation['type'] != ORM_HAS_ONE
-                && $relation['type'] != ORM_MIGHT_HAVE_ONE
-                && $relation['type'] != ORM_BELONGS_TO)
-            {
-               throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition");               
-            }
-
-            // If the input field value is an oject, it means we're talking about a 1=1 relationship.
-            if (is_object($fieldValue)
-                && $relation['type'] != ORM_HAS_ONE
-                && $relation['type'] != ORM_MIGHT_HAVE_ONE
-                && $relation['type'] != ORM_BELONGS_TO)
-            {
-               throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition");
-            }
-            
+         {            
             $shortClassName = $this->getShortClassName($longClassName);
             
             if ($fieldKey == $longClassName || $fieldKey == $shortClassName)
-            {
+            {     
+               // Check for some consistency in the input fields and relations defintion. The related
+               // object in the fields (input) data must represent the relation type.  So if we're
+               // Company, and we have many Employee objects, we expect $key to be an numeric array here,
+               // presumably of Employee object data.  If we just have one Employee object and not an
+               // array, then our input/fields data does not match our ORM definition.  This would be
+               // an irreconcilable mismatch and we would wind up with an invalid object state.
+            
+               // If the input is a numeric array, we consider that to be an array of objects, or it
+               // could be an array of assoc arrays.  Regardless, this signifies to us that the input
+               // field represents a 1 to many relationship.
+               if (is_array($fieldValue) && !$this->ormIsAssoc($fieldValue)
+                  && $relation['type'] != ORM_HAS_MANY
+                  && $relation['type'] != ORM_MANY_TO_MANY)
+               {
+                  throw new InvalidStateException("{$relation['type']} setFields() detected an inconsistency in the input fields when compared to the defined related object definition. Field {$fieldKey} should be a numeric array of hashes/objects, indicating a many relationship.");
+               }
+               
+               // If the input field value is an associtive array (not numeric), is the same as an object,
+               // and also represents 1=1 relationship.
+               if (is_array($fieldValue) && $this->ormIsAssoc($fieldValue)
+                   && $relation['type'] != ORM_HAS_ONE
+                   && $relation['type'] != ORM_MIGHT_HAVE_ONE
+                   && $relation['type'] != ORM_BELONGS_TO)
+               {
+                  throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition. Field culprit: ". $fieldKey);               
+               }
+   
+               // If the input field value is an oject, it means we're talking about a 1=1 relationship.
+               if (is_object($fieldValue)
+                   && $relation['type'] != ORM_HAS_ONE
+                   && $relation['type'] != ORM_MIGHT_HAVE_ONE
+                   && $relation['type'] != ORM_BELONGS_TO)
+               {
+                  throw new InvalidStateException("setFields() detected an inconsistency in the input fields when compared to the defined related object definition. Field culprit: ". $fieldKey);
+               }
+               
                // fieldValue will now represent another level of depth at this point.  It should be
                // one of the following:
                //  * An assoc array or object (has one, belongs to one relationsip)
@@ -653,7 +653,8 @@ abstract class ORM
    // Currently not implemented.
    public function cascadeDelete()
    {
-
+      $this->delete();
+      $this->ormCascadeDelete();
    }
 
 
@@ -1239,7 +1240,10 @@ abstract class ORM
    {
       foreach ($arr as $key => $value)
       {
-         if (is_string($key)) return true;
+         if (is_string($key))
+         {
+            return true;
+         }
       }
       
       return false;
@@ -1480,21 +1484,26 @@ abstract class ORM
                   $this->cascadeSaveInvalidStateException("Related object {$shortClassName} in array position {$i} is not a valid ORM object.");                  
                }
                
-               // Check that the foreign key equals our primary key.  If not, we don't save this.
-               if ($objRef->get($foreignKeyField) == $primaryKeyValue)
+               // Check that the foreign key equals our primary key.  If not, we assume this related
+               // object has not been saved yet.  Set the foreign key and save it, which will issue
+               // an INSERT statement, creating the record.
+               //
+               // NOTE: If there is the wrong foreign key value in the object, I have made the decision
+               // to overwrite it.  This would break the related record's relationship, but why would
+               // it be part of our object anyway?  The user will be at fault for passing the wrong
+               // related object manually or via setFields().
+               if ($objRef->get($foreignKeyField) != $primaryKeyValue)
                {
-                  try
-                  {
-                     $objRef->save();                     
-                  }
-                  catch (\Exception $e)
-                  {
-                     $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
-                  }
+                  $objRef->set($foreignKeyField, $primaryKeyValue);
                }
-               else
+
+               try
                {
-                  $this->cascadeSaveInvalidStateException("Related object {$shortClassName} in array position {$i} did not have our foreign key set in object field '{$foreignKeyField}'");
+                  $objRef->save();                     
+               }
+               catch (\Exception $e)
+               {
+                  $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
                }
                
                $i++;
@@ -1512,22 +1521,22 @@ abstract class ORM
                $this->cascadeSaveORMException("Related object {$shortClassName} is not a valid ORM object");                     
             }
                
-            // Check that the foreign key equals our primary key.  If not, we don't save this.
-            if ($objRef->get($foreignKeyField) == $primaryKeyValue)
+            // Do the same check as before for foreign key...
+            // Note: This will also ensure that any object with a 1=1 (has one, belongs to, etc...)
+            // relationship always has a new record created when doing cascade save...
+            if ($objRef->get($foreignKeyField) != $primaryKeyValue)
             {
-               try
-               {
-                  $objRef->save();                     
-               }
-               catch (\Exception $e)
-               {
-                  $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName}", $e);
-               }
+               $objRef->set($foreignKeyField, $primaryKeyValue);
             }
-            else
+
+            try
             {
-               $this->cascadeSaveInvalidStateException("Related object {$shortClassName} did not have our foreign key set in object field '{$foreignKeyField}'");
-            }            
+               $objRef->save();                     
+            }
+            catch (\Exception $e)
+            {
+               $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName}", $e);
+            }
          }
       }
       
@@ -1622,6 +1631,131 @@ abstract class ORM
       }
 
       return true;
+   }
+   
+   
+   private function ormCascadeDelete()
+   {
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
+      
+      if ($primaryKeyValue != 0 && empty($primaryKeyValue))
+      {
+         throw new InvalidStateException("Cascade delete failed to start: The primary key was not set in this object.");
+      }
+      
+      try
+      {
+         if ($this->orm['enableTransactions']) $this->orm['writer']->beginTransaction();         
+      }
+      catch (\Exception $e)
+      {
+            throw new ORMException("Cascade save failed to start: Could not start a transaction.", 0, $e);         
+      }
+      
+      foreach ($this->orm['relations'] as $longClassName => $relDetail)
+      {
+         $shortClassName = $this->getShortClassName($longClassName);
+
+         if (!isset($this->orm['data'][$shortClassName]) || empty($this->orm['data'][$shortClassName]))
+         {
+            continue;
+         }
+
+         list($primaryKeyField, $foreignKeyField) = explode(":", $relDetail['key']);
+
+         if (empty($primaryKeyField) || empty($foreignKeyField))
+         {
+            $this->cascadeDeleteInvalidStateException("There is an invalid key 'local:foreign' in relation definition for {$shortClassName}");
+         }
+	 
+         // If we have a numeric array, we have a 'has many' relationship, and we need to iterate
+         // through the array of related objects.  If the array is empty, then we just won't do
+         // anything and move on...
+         if (is_array($this->orm['data'][$shortClassName]) && !$this->isAssoc($this->orm['data'][$shortClassName]))
+         {
+            $i = 0;
+            
+            foreach ($this->orm['data'][$shortClassName] as $objRef)
+            {
+               if (!method_exists($objRef, "get") || !method_exists($objRef, "delete"))
+               {
+                  $this->cascadeDeleteInvalidStateException("Related object {$shortClassName} in array position {$i} is not a valid ORM object.");                  
+               }
+               
+               // Only delete related objects that have an actual primary key value set.  Ignore the rest.
+               if ($objRef->get($foreignKeyField) == $primaryKeyValue)
+               {
+                  try
+                  {
+                     $objRef->delete();                     
+                  }
+                  catch (\Exception $e)
+                  {
+                     $this->cascadeDeleteORMException("Caught exception when deleting related object {$shortClassName} in array position {$i}", $e);                     
+                  }
+               }
+               
+               $i++;
+            }
+         }
+         
+         // Here we assume an assoc. array of key=>value pairs, or an object with properties.  This
+         // signifies a 'has one' relationship, so we attempt to save this single related object.
+         else
+         {
+            $objRef = $this->orm['data'][$shortClassName];
+            
+            if (!method_exists($objRef, "get") || !method_exists($objRef, "delete"))
+            {
+               $this->cascadeDeleteInvalidStateException("Related object {$shortClassName} is not a valid ORM object");                     
+            }
+               
+            // Only delete related objects that have an actual primary key value set.  Ignore the rest.
+            if ($objRef->get($foreignKeyField) == $primaryKeyValue)
+            {
+               try
+               {
+                  $objRef->delete();                     
+               }
+               catch (\Exception $e)
+               {
+                  $this->cascadeDeleteORMException("Caught exception when deleting related object {$shortClassName}", $e);                     
+               }
+            }
+         }
+      }
+      
+      if ($this->orm['enableTransactions']) $this->orm['writer']->commitTransaction();
+   }
+   
+   
+   // Utility function to rollback transaction if enabled, and throw an exception
+   private function cascadeDeleteInvalidStateException($message, \Exception $e = null)
+   {
+      if ($this->orm['enableTransactions'])
+      {
+         $this->orm['writer']->rollbackTransaction();
+         throw new InvalidStateException("Cascade delete transaction rollback: {$message}", 0, $e);                  
+      }
+      else
+      {
+         throw new InvalidStateException("Cascade delete failure: {$message}: No transaction rollback attempted.", 0, $e);
+      }      
+   }
+
+
+   // Utility function to rollback transaction if enabled, and throw an exception
+   private function cascadeDeleteORMException($message, \Exception $e = null)
+   {
+      if ($this->orm['enableTransactions'])
+      {
+         $this->orm['writer']->rollbackTransaction();
+         throw new ORMException("Cascade delete transaction rollback: {$message}", 0, $e);
+      }
+      else
+      {
+         throw new ORMException("Cascade delete failure: {$message}: No transaction rollback attempted.", 0, $e);
+      }      
    }
    
    
