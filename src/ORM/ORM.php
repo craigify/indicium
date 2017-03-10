@@ -579,7 +579,7 @@ abstract class ORM
    // @return mixed Returns number of rows updated, if any.
    public function quickUpdate($ormFields, $conditions, $limit=null)
    {
-      if ((!is_array($ormFields) && !$this->isAssoc($ormFields)) || !is_object($ormFields))
+      if ((!is_array($ormFields) && !$this->isAssoc($ormFields)) && !is_object($ormFields))
       {
          throw new ORMException("ormFields is supposed to be either an associative array of key=value pairs, or an object with properties.");
       }      
