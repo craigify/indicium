@@ -650,13 +650,13 @@ abstract class QueryBuilder
 
    
    // Get the last stored result resource handle.
-   protected function getResult()
+   public function getResult()
    {
       return $this->dbresult;
    }
 
 
-   protected function getConnection()
+   public function getConnection()
    {
       return $this->connection;
    }
