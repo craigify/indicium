@@ -14,8 +14,8 @@ class Mapper
 {
 	const TO_ARRAY = 1;
 	const TO_OBJECT = 2;
-	
-	
+
+
 	// Map input to a standard PHP object, or array of objects.
 	static public function toObject($input)
 	{
@@ -36,8 +36,12 @@ class Mapper
 	{
 		if ($input instanceof ORM)
 		{
-			$map = $input->getFields();
-			
+			// Get any properties on the object that is not mapped to db, then merge that with the
+			// values returned from getFields()
+			$props = [];
+			foreach ($input as $key => $value) $props[$key] = $value;
+			$map = array_merge($props, $input->getFields());
+
 			if ($format == self::TO_OBJECT)
 			{
 				$map = (object)$map;
@@ -59,13 +63,15 @@ class Mapper
 				
 				if ($orm instanceof ORM)
 				{
+					// Get any properties on the object that is not mapped to db, then merge that
+					// with the values returned from getFields()
+					$props = [];
+					foreach ($orm as $key => $value) $props[$key] = $value;
+					$newMap = array_merge($props, $orm->getFields());
+					
 					if ($format == self::TO_OBJECT)
 					{
-						$newMap = (object)$orm->getFields();
-					}
-					else
-					{
-						$newMap = $orm->getFields();
+						$newMap = (object)$newMap;
 					}
 
 					self::mapRelations($orm, $format, $newMap);
