@@ -308,14 +308,16 @@ abstract class ORM
    }
    
    
-   // Set data on the ORM object as well as data on any related orm objects.  The fields data can be a simple
-   // object with properties, or an assoc array of key=>value pairs.
+   // Set data on the ORM object as well as data on any related orm objects.  The fields data can be
+   // a simple object with properties, or an assoc array of key=>value pairs.
    //
-   // Related objects should be represented by their short class name, and contain either an array of objects
-   // (or assoc arrays) with keys for has many relationships, or just a singular object or assoc array with keys
-   // for a 1=1 relationship.
+   // Related objects should be represented by their short class name, and contain either an array
+   // of objects (or assoc arrays) with keys for has many relationships, or just a singular object
+   // or assoc array with keys for a 1=1 relationship.
    //
-   // @throws InvalidStateException if the input field data contains related object data that does not match the relation definitions
+   // @throws InvalidStateException if the input field data contains related object data that does
+   //         not match the relation definitions
+   //
    // @throws ORMException for all other errors
    //
    // @param mixed $fields Field data to set
@@ -324,7 +326,7 @@ abstract class ORM
       if ((!is_array($fields) && !$this->isAssoc($fields)) && !is_object($fields))
       {
          throw new ORMException("fields is supposed to be either an associative array of key=value pairs, or an object with properties.");
-      }      
+      }
 
       if (is_object($fields))
       {
@@ -1082,11 +1084,20 @@ abstract class ORM
    // @throws ORMException for errors
    private function ormSetRelationFields($fields, $longClassName, $shortClassName, $relationKey)
    {
-      list($primaryKeyField, $foreignKeyField) = split(":", $relationKey);
-      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
-      
-      if (empty($primaryKeyField) || empty($foreignKeyField)) throw new ORMException("setRelationFields() was not passed in a properly formated relationKey: '{$relationKey}'");
-      if (empty($primaryKeyValue)) throw new ORMException("setRelationFields() detected an empty primary key value from ormGetPrimaryKeyValue()");
+      list($primaryKeyField, $foreignKeyField) = preg_split("/:/", $relationKey);
+
+      // If $this is synched to the DB, we should have a primary key.  The primary key/value will be
+      // used to set data on related objects when $this is synched.
+      if ($this->isSynched())
+      {
+         $primaryKeyValue = $this->ormGetPrimaryKeyValue();
+         if (empty($primaryKeyField) || empty($foreignKeyField)) throw new ORMException("ormSetRelationFields(): Not passed in a properly formated relationKey: '{$relationKey}'");
+         if (empty($primaryKeyValue)) throw new ORMException("ormSetRelationFields(): The primary object is synched, but has no primary key.");         
+      }
+      else
+      {
+         $primaryKeyValue = null;
+      }
       
       // If fields is a numeric array, this signifies a 'has many' relationship.  We will presumably
       // have 1 or more data sets for the related object in the array.
@@ -1122,7 +1133,7 @@ abstract class ORM
             $relatedObj->setQueryBuilderReader($this->getReader());
             $relatedObj->setQueryBuilderWriter($this->getWriter());
             $relatedObj->setFields($relatedFields);
-            $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+            if (!empty($primaryKeyValue)) $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
             $this->orm['data'][$shortClassName][] = $relatedObj;
          }
       }
@@ -1137,14 +1148,14 @@ abstract class ORM
       {
          if (!isset($this->orm['data'][$shortClassName][0]) || !method_exists($this->orm['data'][$shortClassName][0], "ormGetPrimaryKeyField"))
          {
-            throw new ORMException("setRelationFields() detected a numeric internal array for {$shortClassName}, but index 0 was not an ORM object.");
+            throw new ORMException("ormSetRelationFieldsHasMany() detected a numeric internal array for {$shortClassName}, but index 0 was not an ORM object.");
          }
             
          $relatedPrimaryKeyField = $this->orm['data'][$shortClassName][0]->ormGetPrimaryKeyField();
             
          if (empty($relatedPrimaryKeyField))
          {
-            throw new ORMException("setRelationFields() tried to get primary key field for related object {$relatedPrimaryKeyField} but it returned an empty value. This could mean the related object is improperly configured.");               
+            throw new ORMException("ormSetRelationFieldsHasMany() tried to get primary key field for related object {$relatedPrimaryKeyField} but it returned an empty value. This could mean the related object is improperly configured.");               
          }
             
          foreach ($fields as $relatedFields)
@@ -1169,7 +1180,7 @@ abstract class ORM
                   $relatedObj->setQueryBuilderReader($this->getReader());
                   $relatedObj->setQueryBuilderWriter($this->getWriter());
                   $relatedObj->setFields($relatedFields);
-                  $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+                  if (!empty($primaryKeyValue)) $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
                   $this->orm['data'][$shortClassName][] = $relatedObj;                     
                }
             }
@@ -1182,7 +1193,7 @@ abstract class ORM
                $relatedObj->setQueryBuilderReader($this->getReader());
                $relatedObj->setQueryBuilderWriter($this->getWriter());
                $relatedObj->setFields($relatedFields);
-               $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+               if (!empty($primaryKeyValue)) $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
                $this->orm['data'][$shortClassName][] = $relatedObj;
             }
          }
@@ -1206,7 +1217,7 @@ abstract class ORM
          $relatedObj->setQueryBuilderReader($this->getReader());
          $relatedObj->setQueryBuilderWriter($this->getWriter());
          $relatedObj->setFields($fields);
-         $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
+         if (!empty($primaryKeyValue)) $relatedObj->ormSet($foreignKeyField, $primaryKeyValue);
          $this->orm['data'][$shortClassName] = $relatedObj;
       }      
    }
