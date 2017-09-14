@@ -83,10 +83,10 @@ abstract class ORM
 
 
    // Constructor.
-   public function __construct($loadRelations = true)
+   public function __construct()
    {
       $this->orm['data'] = array();
-      $this->orm['loadRelations'] = $loadRelations;
+      $this->orm['loadRelations'] = true;
       $this->orm['tableName'] = $this->getShortClassName(); // get_class($this);
       $this->orm['tableNameDb'] = $this->getShortClassName(); // get_class($this);
       $this->orm['primaryKey'] = NULL;
@@ -231,7 +231,19 @@ abstract class ORM
    }
 
    
+   // Enable automatic loading of nested relations (default).
+   public function enableNestedRelations()
+   {
+      $this->orm['loadRelations'] = true;
+   }
    
+   // Disable the automatic loading of nested relations.
+   public function disableNestedRelations()
+   {
+      $this->orm['loadRelations'] = false;      
+   }
+
+
    //////////////////////////////////////////////////////////////////////////////////////////////////
    // get, set and load methods.  Get data in and out of the current object.               
    //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -769,37 +781,25 @@ abstract class ORM
 
 
 
-  /* Load relations from database.  Specify no argument to load all, or specify an array with relation names
-   *
-   * loadRelations(array("Employees", "Contractors")) to load Employee and Contractors relations
+  /* Load relations from database manually. If automatic nested relation loading is enabled, this is done for you.
    */
 
-   public function loadRelations($data = array())
+   public function loadRelations()
    {
-      global $ORMRelationLevel;
-      $ORMRelationLevel = 0;
-
-      if (empty($data))
+      if (count($this->orm['relations']) > 0)
       {
-         $this->__construct();
-         $this->load($this->ormGetPrimaryKeyValue());
-      }
+         // We must have a primary key value set to load relations.
+         $pkVal = $this->ormGetPrimaryKeyValue();
 
-      else
-      {
-         $this->__construct();
-
-         foreach (array_diff_key($this->orm['relations'], array_flip($data)) as $class => $value)
+         if ($pkVal === null || $pkVal === false)
          {
-            unset($this->orm['relations'][$class]);
-            unset($this->orm['classes'][$class]);
-            unset($this->$class);
+            return false;
          }
 
-         $this->load($this->ormGetPrimaryKeyValue());
+         $this->load($pkVal);
       }
 
-   return true;
+      return true;
    }
 
    
@@ -1391,11 +1391,11 @@ abstract class ORM
    // this would throw errors.
    public function ormGetPrimaryKeyValue()
    {
-      $p = $this->orm['primaryKey'];
+      $pkField = $this->orm['primaryKey'];
 
-      if (isset($this->$p))
+      if (isset($this->$pkField))
       {
-         return $this->$p;
+         return $this->$pkField;
       }
       else
       {
@@ -2086,7 +2086,7 @@ abstract class ORM
       foreach ($this->orm['relations'] as $class => $detail)
       {
          $shortClass = $this->getShortClassName($class);
-         
+
          if ($detail['type'] == ORM_HAS_ONE || $detail['type'] == ORM_BELONGS_TO || $detail['type'] == ORM_MIGHT_HAVE_ONE)
          {
             $objRef = $this->{$shortClass};
@@ -2095,6 +2095,15 @@ abstract class ORM
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $this->setForeignKeyValue($detail, $objRef);
+            if ($this->orm['loadRelations'])
+            {
+               $objRef->enableNestedRelations();
+               $objRef->loadRelations();
+            }
+            else
+            {
+               $objRef->disableNestedRelations();
+            }
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2108,10 +2117,19 @@ abstract class ORM
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
+            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
             $this->setForeignKeyValue($detail, $objRef);
+            if ($this->orm['loadRelations'])
+            {
+               $objRef->enableNestedRelations();
+               $objRef->loadRelations();
+            }
+            else
+            {
+               $objRef->disableNestedRelations();
+            }
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
-            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             //unset($objRef);
          }
@@ -2123,10 +2141,19 @@ abstract class ORM
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
+            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
             $this->setForeignKeyValue($detail, $objRef);
+            if ($this->orm['loadRelations'])
+            {
+               $objRef->enableNestedRelations();
+               $objRef->loadRelations();
+            }
+            else
+            {
+               $objRef->disableNestedRelations();
+            }
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
-            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
             unset($objRef);
          }
@@ -2185,6 +2212,15 @@ abstract class ORM
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
             $newObj->setForeignKeyValue($detail, $objRef);
+            if ($this->orm['loadRelations'])
+            {
+               $objRef->enableNestedRelations();
+               $objRef->loadRelations();
+            }
+            else
+            {
+               $objRef->disableNestedRelations();
+            }
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if ($numFields > 0) $newObj->{$shortClass} = $objRef;
@@ -2198,8 +2234,6 @@ abstract class ORM
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-            $newObj->setForeignKeyValue($detail, $objRef);
-
             if ($numFields > 0)
             {
                // We need to get a reference, modify it, then re-set it.
@@ -2207,7 +2241,16 @@ abstract class ORM
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
             }
-            
+            $newObj->setForeignKeyValue($detail, $objRef);
+            if ($this->orm['loadRelations'])
+            {
+               $objRef->enableNestedRelations();
+               $objRef->loadRelations();
+            }
+            else
+            {
+               $objRef->disableNestedRelations();
+            }
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2220,9 +2263,7 @@ abstract class ORM
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
-            $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-            $newObj->setForeignKeyValue($detail, $objRef);
-            
+            $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);            
             if ($numFields > 0)
             {
                // We need to get a reference, modify it, then re-set it.
@@ -2230,7 +2271,16 @@ abstract class ORM
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
             }
-
+            $newObj->setForeignKeyValue($detail, $objRef);
+            if ($this->orm['loadRelations'])
+            {
+               $objRef->enableNestedRelations();
+               $objRef->loadRelations();
+            }
+            else
+            {
+               $objRef->disableNestedRelations();
+            }
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
