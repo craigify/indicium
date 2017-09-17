@@ -39,7 +39,12 @@ class Mapper
 			// Get any properties on the object that is not mapped to db, then merge that with the
 			// values returned from getFields()
 			$props = [];
-			foreach ($input as $key => $value) $props[$key] = $value;
+			foreach ($input as $key => $value)
+			{
+				if ($key === "orm") continue;
+				$props[$key] = $value;
+			}
+
 			$map = array_merge($props, $input->getFields());
 
 			if ($format == self::TO_OBJECT)
@@ -66,7 +71,11 @@ class Mapper
 					// Get any properties on the object that is not mapped to db, then merge that
 					// with the values returned from getFields()
 					$props = [];
-					foreach ($orm as $key => $value) $props[$key] = $value;
+					foreach ($orm as $key => $value)
+					{
+						if ($key === "orm") continue;
+						$props[$key] = $value;
+					}
 					$newMap = array_merge($props, $orm->getFields());
 					
 					if ($format == self::TO_OBJECT)

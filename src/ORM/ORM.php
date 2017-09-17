@@ -79,7 +79,7 @@ define("ORM_ARRAY",          2004);
 abstract class ORM
 {
    // All ORM objects store their data in this internal array.  This is done to stop too much object pollution with ORM stuff.
-   protected $orm = array();
+   public $orm = array();
 
 
    // Constructor.
@@ -416,7 +416,7 @@ abstract class ORM
    // @return mixed
    public function get($objField)
    {      
-      if (isset($this->orm['data'][$objField]))
+      if (isset($this->orm['data'][$objField]) || $this->orm['data'][$objField] === null)
       {
          return $this->orm['data'][$objField];
       }
@@ -435,7 +435,7 @@ abstract class ORM
 
       foreach ($this->orm['objectFieldMap'] as $key => $value)
       {
-         if (isset($this->orm['data'][$key]))
+         if (isset($this->orm['data'][$key]) || $this->orm['data'][$key] === null)
          {
             $fields[$key] = $this->orm['data'][$key];
          }
@@ -454,7 +454,7 @@ abstract class ORM
       
       foreach ($this->orm['fieldMap'] as $dbField => $objField)
       {         
-         if (isset($this->$objField))
+         if (isset($this->$objField) || $this->$objField === null)
          {
             $fields[$dbField] = $this->orm['data'][$objField];
          }
@@ -2088,7 +2088,8 @@ abstract class ORM
       foreach ($resultset as $key => $value)
       {
          list($resClass, $resParam) = explode("_", $key, 2);
-         if (strtolower($resClass) == $shortClassName) $this->set($resParam, $value);
+        // if (strtolower($resClass) == $shortClassName) $this->ormSet($resParam, $value);
+        if (strtolower($resClass) == $shortClassName) $this->orm['data'][$resParam] = $value;
       }
 
       $this->orm['dbSync'] = true;
@@ -2207,8 +2208,9 @@ abstract class ORM
          foreach ($resultset as $key => $value)
          {
             list($resClass, $resParam) = explode("_", $key, 2);
-            if (strtolower($resClass) == strtolower($this->getShortClassName(get_class($newObj)))) $newObj->set($resParam, $value);
-         }         
+            //if (strtolower($resClass) == strtolower($this->getShortClassName(get_class($newObj)))) $newObj->ormSet($resParam, $value);
+           if (strtolower($resClass) == strtolower($this->getShortClassName(get_class($newObj)))) $newObj->orm['data'][$resParam] = $value;
+         }
       }
       
       // Set values in related objects in newObj
@@ -2367,9 +2369,10 @@ abstract class ORM
       {
          list($resClass, $resParam) = explode("_", $key, 2);
              
-         if ($resClass == $shortClassName && $value != NULL)
+         if ($resClass == $shortClassName)
          {
-            $objRef->{$resParam} = $value;
+            //$objRef->ormSet($resParam, $value);
+            $objRef->orm['data'][$resParam] = $value;
             $numFields++;
          }
       }
