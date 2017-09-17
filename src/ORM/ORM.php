@@ -2001,6 +2001,12 @@ abstract class ORM
       $objects = array();
       $index = array();
       
+      // Hold any objects that need to load nested relations.  We'll do this after we get all the
+      // results for load or find operation.  We have to wait because if we execute another query
+      // before we fetch all the data from the previous query, the mysql client will free up the
+      // rest of the resulset.  Other DB engines could exhibit similar behavior...
+      $this->orm['objectsWaitingForRelations'] = array();
+      
       // Iterate through the query queue, executing each db query and converting each resulset...
       foreach ($this->orm['queryQueue'] as $queue)
       {
@@ -2052,8 +2058,14 @@ abstract class ORM
 
       // end foreach
       }
-      
-      unset($index); // just in case?
+
+      // Load any related data on any objects now that we've converted our resulset from the DB.
+      foreach ($this->orm['objectsWaitingForRelations'] as $objRef)
+      {
+         $objRef->loadRelations();  
+      }
+
+      $this->orm['objectsWaitingForRelations'] = null;
       return $objects;
    }
 
@@ -2081,7 +2093,7 @@ abstract class ORM
 
       $this->orm['dbSync'] = true;
       $this->orm['isDirty'] = false;
-
+      
       // Set values in related objects in $this
       foreach ($this->orm['relations'] as $class => $detail)
       {
@@ -2098,7 +2110,7 @@ abstract class ORM
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
-               $objRef->loadRelations();
+               $this->orm['objectsWaitingForRelations'][] = $objRef;
             }
             else
             {
@@ -2122,7 +2134,7 @@ abstract class ORM
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
-               $objRef->loadRelations();
+               $this->orm['objectsWaitingForRelations'][] = $objRef;
             }
             else
             {
@@ -2131,7 +2143,7 @@ abstract class ORM
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
-            //unset($objRef);
+            unset($objRef);
          }
 
          if ($detail['type'] == ORM_MANY_TO_MANY)
@@ -2146,7 +2158,7 @@ abstract class ORM
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
-               $objRef->loadRelations();
+               $this->orm['objectsWaitingForRelations'][] = $objRef;
             }
             else
             {
@@ -2198,7 +2210,7 @@ abstract class ORM
             if (strtolower($resClass) == strtolower($this->getShortClassName(get_class($newObj)))) $newObj->set($resParam, $value);
          }         
       }
-
+      
       // Set values in related objects in newObj
       foreach ($newObj->orm['relations'] as $class => $detail)
       {
@@ -2215,7 +2227,7 @@ abstract class ORM
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
-               $objRef->loadRelations();
+               $this->orm['objectsWaitingForRelations'][] = $objRef;
             }
             else
             {
@@ -2245,7 +2257,7 @@ abstract class ORM
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
-               $objRef->loadRelations();
+               $this->orm['objectsWaitingForRelations'][] = $objRef;
             }
             else
             {
@@ -2275,7 +2287,7 @@ abstract class ORM
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
-               $objRef->loadRelations();
+               $this->orm['objectsWaitingForRelations'][] = $objRef;
             }
             else
             {
