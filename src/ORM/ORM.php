@@ -101,6 +101,7 @@ abstract class ORM
       $this->orm['dbSync'] = false;
       $this->orm['isDirty'] = false;
       $this->orm['enableTransactions'] = true;
+      $this->orm['saveAutoReload'] = true;
       $this->orm['cascadeSave'] = false;
       $this->orm['cascadeDelete'] = false;
       $this->orm['reader'] = NULL;
@@ -218,24 +219,54 @@ abstract class ORM
 
    
    // Enable automatic cascade save.
-   protected function enableCascadeSave()
+   //
+   // Default is cascade save is disabled.
+   //
+   public function enableCascadeSave()
    {
       $this->orm['cascadeSave'] = true;
    }
 
    
    // Disable automatic cascade save.
-   protected function disableCascadeSave()
+   //
+   // This is the default state.
+   //
+   public function disableCascadeSave()
    {
       $this->orm['cascadeSave'] = false;
    }
-
    
-   // Enable automatic loading of nested relations (default).
+   
+   // Enable automatic reloading after saving.  This ensures that all related objects and nested
+   // relations (if those are enabled) are loaded and synched when saving new data to the DB.
+   //
+   // This is the default state.
+   //
+   public function enableSaveAutoReload()
+   {
+      $this->orm['saveAutoReload'] = true;
+   }
+   
+   
+   // Disable automatic reloading after saving.  This will leave you with inconsistent ORM objects
+   // after inserting to the DB, but will probably be  _much_ faster in most cases, especially if
+   // you have many related objects.
+   public function disableSaveAutoReload()
+   {
+      $this->orm['saveAutoReload'] = false;
+   }
+   
+   
+   // Enable automatic loading of nested relations
+   //
+   // This is the default state.
+   //
    public function enableNestedRelations()
    {
       $this->orm['loadRelations'] = true;
    }
+   
    
    // Disable the automatic loading of nested relations.
    public function disableNestedRelations()
@@ -416,7 +447,7 @@ abstract class ORM
    // @return mixed
    public function get($objField)
    {      
-      if (isset($this->orm['data'][$objField]) || $this->orm['data'][$objField] === null)
+      if (isset($this->orm['data'][$objField]))
       {
          return $this->orm['data'][$objField];
       }
@@ -435,9 +466,13 @@ abstract class ORM
 
       foreach ($this->orm['objectFieldMap'] as $key => $value)
       {
-         if (isset($this->orm['data'][$key]) || $this->orm['data'][$key] === null)
+         if (isset($this->orm['data'][$key]))
          {
             $fields[$key] = $this->orm['data'][$key];
+         }
+         else
+         {
+            $fields[$key] = null;
          }
       }
 
@@ -454,9 +489,13 @@ abstract class ORM
       
       foreach ($this->orm['fieldMap'] as $dbField => $objField)
       {         
-         if (isset($this->$objField) || $this->$objField === null)
+         if (isset($this->$objField))
          {
             $fields[$dbField] = $this->orm['data'][$objField];
+         }
+         else
+         {
+            $fields[$dbField] = null;
          }
       }
       
@@ -507,6 +546,25 @@ abstract class ORM
    return $ret;
    }
 
+
+   // Reload the ORM object, loading up any nested relations again if enabled.  If automatic nested
+   // relations loading is disabled, you'll be responsible for doing this manually.
+   // @throws ORMException on error
+   public function reload()
+   {
+      $primaryKeyField = $this->ormGetPrimaryKeyField();
+      $primaryKeyValue = $this->ormGetPrimaryKeyValue();
+
+      if (empty($primaryKeyValue) && $primaryKeyValue != 0)
+      {
+         throw new ORMException("No primary key defined, therefore I cannot reload() " . get_class($this));
+      }
+      
+      $conditions = $this->ormConditions(array("{$primaryKeyField} = {$primaryKeyValue}"));
+      $ret = $this->ormLoad(ORM_THIS_OBJECT, 1, $conditions);
+
+   return $ret;
+   }
 
 
    // Load a tuple from the database, using a UNIQUE value for reference other than the primary key.
@@ -562,6 +620,11 @@ abstract class ORM
       else
       {
          $this->ormSave();
+
+         if (!isset($this->orm['cascadeSaveInProgress']) && $this->orm['saveAutoReload'] == true)
+         {
+            $this->reload();
+         }
       }
    }
    
@@ -572,8 +635,11 @@ abstract class ORM
    // @throws ORMException for all other errors
    public function cascadeSave()
    {
+      $this->orm['cascadeSaveInProgress'] = true;
       $this->save();
       $this->ormCascadeSave();
+      if ($this->orm['saveAutoReload'] == true) $this->reload();
+      unset($this->orm['cascadeSaveInProgress']);
    }
 
    
@@ -1125,7 +1191,7 @@ abstract class ORM
       // added as new objects to be inserted in the database later with save().
       if (!isset($this->orm['data'][$shortClassName]) || count($this->orm['data'][$shortClassName]) == 0)
       {
-         $this->data[$shortClassName] = [];
+         $this->orm['data'][$shortClassName] = [];
 
          foreach ($fields as $relatedFields)
          {
@@ -1449,6 +1515,7 @@ abstract class ORM
    // @throws ORMException on all other errors
    private function ormCascadeSave()
    {
+      $primaryKeyField = $this->ormGetPrimaryKeyField();
       $primaryKeyValue = $this->ormGetPrimaryKeyValue();
       
       if ($primaryKeyValue != 0 && empty($primaryKeyValue))
@@ -1474,53 +1541,48 @@ abstract class ORM
             continue;
          }
 
-         list($primaryKeyField, $foreignKeyField) = explode(":", $relDetail['key']);
+         list($localKeyField, $foreignKeyField) = explode(":", $relDetail['key']);
 
-         if (empty($primaryKeyField) || empty($foreignKeyField))
+         if (empty($localKeyField) || empty($foreignKeyField))
          {
             $this->cascadeSaveInvalidStateException("There is an invalid key 'local:foreign' in relation definition for {$shortClassName}");
          }
-	 
+
          // If we have a numeric array, we have a 'has many' relationship, and we need to iterate
          // through the array of related objects.  If the array is empty, then we just won't do
          // anything and move on...
          if (is_array($this->orm['data'][$shortClassName]) && !$this->isAssoc($this->orm['data'][$shortClassName]))
          {
             $i = 0;
-            
+
             foreach ($this->orm['data'][$shortClassName] as $objRef)
             {
                if (!method_exists($objRef, "get") || !method_exists($objRef, "save"))
                {
                   $this->cascadeSaveInvalidStateException("Related object {$shortClassName} in array position {$i} is not a valid ORM object.");                  
                }
-               
-               // Check that the foreign key equals our primary key.  If not, we assume this related
-               // object has not been saved yet.  Set the foreign key and save it, which will issue
-               // an INSERT statement, creating the record.
-               //
-               // NOTE: If there is the wrong foreign key value in the object, I have made the decision
-               // to overwrite it.  This would break the related record's relationship, but why would
-               // it be part of our object anyway?  The user will be at fault for passing the wrong
-               // related object manually or via setFields().
-               if ($objRef->get($foreignKeyField) != $primaryKeyValue)
+
+               // Does the related object have our PRIMARY KEY as a foreign key?  If so, set the key value and
+               // issue a save(), creating a new entry in the DB and syncing this object.  If this is not the
+               // case, then a new object of this type does not get created.
+               if ($localKeyField == $primaryKeyField)
                {
                   $objRef->set($foreignKeyField, $primaryKeyValue);
+
+                  try
+                  {
+                     $objRef->cascadeSave();                     
+                  }
+                  catch (\Exception $e)
+                  {
+                     $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
+                  }
                }
 
-               try
-               {
-                  $objRef->save();                     
-               }
-               catch (\Exception $e)
-               {
-                  $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
-               }
-               
                $i++;
             }
          }
-         
+
          // Here we assume an assoc. array of key=>value pairs, or an object with properties.  This
          // signifies a 'has one' relationship, so we attempt to save this single related object.
          else
@@ -1532,21 +1594,26 @@ abstract class ORM
                $this->cascadeSaveORMException("Related object {$shortClassName} is not a valid ORM object");                     
             }
                
-            // Do the same check as before for foreign key...
-            // Note: This will also ensure that any object with a 1=1 (has one, belongs to, etc...)
-            // relationship always has a new record created when doing cascade save...
-            if ($objRef->get($foreignKeyField) != $primaryKeyValue)
+            // Does the related object have our PRIMARY KEY as a foreign key?  If so, set the key value and
+            // issue a save(), creating a new entry in the DB and syncing this object.  If this is not the
+            // case, then a new object of this type does not get created.
+            //
+            // NOTE: This means any HAS_ONE, MIGHT_HAVE_ONE object with a 1=1 relationship gets automatically
+            // created with cascade save, but ONLY if it has our foreign key.  Other related objects where we
+            // have their foreign key do not get automatically created.
+            //
+            if ($localKeyField == $primaryKeyField)
             {
                $objRef->set($foreignKeyField, $primaryKeyValue);
-            }
 
-            try
-            {
-               $objRef->save();                     
-            }
-            catch (\Exception $e)
-            {
-               $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName}", $e);
+               try
+               {
+                  $objRef->cascadeSave();                     
+               }
+               catch (\Exception $e)
+               {
+                  $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
+               }
             }
          }
       }
@@ -1605,7 +1672,10 @@ abstract class ORM
 
       foreach ($this->orm['insertUpdateMap'] as $objVar => $dbVar)
       {
-         $fields[$dbVar] = $this->orm['data'][$objVar];
+         if (isset($this->orm['data'][$objVar]))
+         {
+            $fields[$dbVar] = $this->orm['data'][$objVar];            
+         }
       }
 
       if ($this->orm['unique'] == true)
@@ -1616,15 +1686,14 @@ abstract class ORM
       {
          $iMethod = "doInsert";
       }
-
+      
       if (!$this->orm['writer']->{$iMethod}($this->orm['tableNameDb'], $fields))
       {
          throw new ORMException("The QueryBuilder could not perform the operation: {$iMethod}");
       }
 
       // Right now this assumes auto_incrementing primary keys in MySQL only.  If the primary key is
-      // empty, attempt to get it from the db.
-      
+      // empty, attempt to get it from the db.      
       $primaryKeyField = $this->ormGetPrimaryKeyField();
       $primaryKeyValue = $this->ormGetPrimaryKeyValue();
       
@@ -1779,7 +1848,7 @@ abstract class ORM
       {
          $this->onBeforeUpdate();
       }
-      
+
       $primaryKeyField = $this->ormGetPrimaryKeyField();
       $primaryKeyValue = $this->ormGetPrimaryKeyValue();
 
@@ -1789,8 +1858,11 @@ abstract class ORM
       }
 
       foreach ($this->orm['insertUpdateMap'] as $objVar => $dbVar)
-      {        
-         $fields[$dbVar] = $this->orm['data'][$objVar];
+      {
+         if (isset($this->orm['data'][$objVar]))
+         {
+            $fields[$dbVar] = $this->orm['data'][$objVar];            
+         }
       }
 
       $conditions = $this->ormConditions(array("{$primaryKeyField} = {$primaryKeyValue}"));      
@@ -2383,9 +2455,10 @@ abstract class ORM
    }
 
 
-   // This is part of ormLoad()
-   private function ormSetForeignKeyValue($detail, $objRef)
+   private function setForeignKeyValue($detail, $objRef)
    {
+      return;
+   
       if (strpos($detail['key'], ":", 1))
       {
          list($localKey, $foreignKey) = explode(":", $detail['key']);
