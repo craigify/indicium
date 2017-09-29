@@ -559,7 +559,8 @@ abstract class ORM
       {
          throw new ORMException("No primary key defined, therefore I cannot reload() " . get_class($this));
       }
-      
+
+      // Reload
       $conditions = $this->ormConditions(array("{$primaryKeyField} = {$primaryKeyValue}"));
       $ret = $this->ormLoad(ORM_THIS_OBJECT, 1, $conditions);
 
@@ -638,11 +639,16 @@ abstract class ORM
       $this->orm['cascadeSaveInProgress'] = true;
       $this->save();
       $this->ormCascadeSave();
-      if ($this->orm['saveAutoReload'] == true) $this->reload();
+
+      if ($this->orm['saveAutoReload'] == true)
+      {
+         $this->reload();
+      }
+
       unset($this->orm['cascadeSaveInProgress']);
    }
 
-   
+
    // *** NOTE: This is just a fancy way to make a SQL UPDATE statement ***
    //
    // Perform a SQL UPDATE database operation for fields specified in $fieldsToUpdate and conditions
@@ -659,6 +665,11 @@ abstract class ORM
    // @return mixed Returns number of rows updated, if any.
    public function quickUpdate($ormFields, $conditions, $limit=null)
    {
+      if (!isset($this->orm['writer']) || empty($this->orm['writer']))
+      {
+         throw new ORMException("Could not perform a quick update operation because there was no QueryBuilder writer set.");
+      }
+      
       if ((!is_array($ormFields) && !$this->isAssoc($ormFields)) && !is_object($ormFields))
       {
          throw new ORMException("ormFields is supposed to be either an associative array of key=value pairs, or an object with properties.");
@@ -707,6 +718,11 @@ abstract class ORM
    // @throws ORMException on other errors
    public function delete()
    {
+      if (!isset($this->orm['writer']) || empty($this->orm['writer']))
+      {
+         throw new ORMException("Could not perform a delete operation because there was no QueryBuilder writer set.");
+      }
+      
       $primaryKeyField = $this->ormGetPrimaryKeyField();
       $primaryKeyValue = $this->ormGetPrimaryKeyValue();
 
@@ -1455,6 +1471,10 @@ abstract class ORM
    // Return the current primary key value in the object.  This is a public function because the ORM
    // code has so reference extrnal objects to manage relationships, and if the method was protected,
    // this would throw errors.
+   //
+   // ** NOTE ** Value can be 0, which would evaluate to false.  Be sure to take this into account.
+   //
+   // @return mixed Returns the primary key value, or null if key is not set.
    public function ormGetPrimaryKeyValue()
    {
       $pkField = $this->orm['primaryKey'];
@@ -1465,7 +1485,7 @@ abstract class ORM
       }
       else
       {
-         return NULL;
+         return null;
       }
    }
 
@@ -1492,7 +1512,7 @@ abstract class ORM
 
    // Check if the current ORM object has any relations defined.
    // @return boolean true if relations are defined, false otherwise.
-   private function ormHasRelations()
+   public function ormHasRelations()
    {
       if (count($this->orm['relations']) > 0)
       {
@@ -1515,6 +1535,11 @@ abstract class ORM
    // @throws ORMException on all other errors
    private function ormCascadeSave()
    {
+      if (!isset($this->orm['writer']) || empty($this->orm['writer']))
+      {
+         throw new ORMException("Could not perform a cascade save operation because there was no QueryBuilder writer set.");
+      }
+      
       $primaryKeyField = $this->ormGetPrimaryKeyField();
       $primaryKeyValue = $this->ormGetPrimaryKeyValue();
       
@@ -1529,7 +1554,7 @@ abstract class ORM
       }
       catch (\Exception $e)
       {
-            throw new ORMException("Cascade save failed to start: Could not start a transaction.", 0, $e);         
+            throw new ORMException("Cascade save failed to start: Could not start a transaction: " . $e->getMessage(), 0, $e);         
       }
       
       foreach ($this->orm['relations'] as $longClassName => $relDetail)
@@ -1575,7 +1600,7 @@ abstract class ORM
                   }
                   catch (\Exception $e)
                   {
-                     $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
+                     $this->cascadeSaveORMException("cascadeSave() caught exception when saving related object {$shortClassName} in array position {$i}: " . $e->getMessage(), $e);                     
                   }
                }
 
@@ -1612,12 +1637,12 @@ abstract class ORM
                }
                catch (\Exception $e)
                {
-                  $this->cascadeSaveORMException("Caught exception when saving related object {$shortClassName} in array position {$i}", $e);                     
+                  $this->cascadeSaveORMException("cascadeSave() caught exception when saving related object {$shortClassName}: " . $e->getMessage(), $e);                     
                }
             }
          }
       }
-      
+
       if ($this->orm['enableTransactions']) $this->orm['writer']->commitTransaction();
    }
 
@@ -1628,11 +1653,11 @@ abstract class ORM
       if ($this->orm['enableTransactions'])
       {
          $this->orm['writer']->rollbackTransaction();
-         throw new InvalidStateException("Cascade save transaction rollback: {$message}", 0, $e);                  
+         throw new InvalidStateException("cascadeSaveInvalidStateException(): Transaction rollback: {$message}", 0, $e);                  
       }
       else
       {
-         throw new InvalidStateException("Cascade save failure: {$message}: No transaction rollback attempted.", 0, $e);
+         throw new InvalidStateException("cascadeSaveInvalidStateException(): Failure: {$message}: No transaction rollback attempted.", 0, $e);
       }      
    }
 
@@ -1643,11 +1668,11 @@ abstract class ORM
       if ($this->orm['enableTransactions'])
       {
          $this->orm['writer']->rollbackTransaction();
-         throw new ORMException("Cascade save transaction rollback: {$message}", 0, $e);
+         throw new ORMException("cascadeSaveORMException(): Transaction rollback: {$message}", 0, $e);
       }
       else
       {
-         throw new ORMException("Cascade save failure: {$message}: No transaction rollback attempted.", 0, $e);
+         throw new ORMException("cascadeSaveORMException(): Failure: {$message}: No transaction rollback attempted.", 0, $e);
       }      
    }
    
@@ -1660,6 +1685,11 @@ abstract class ORM
    // @throws ORMException on error
    public function ormSave()
    {
+      if (!isset($this->orm['writer']) || empty($this->orm['writer']))
+      {
+         throw new ORMException("Could not perform a save operation because there was no QueryBuilder writer set.");
+      }
+      
       if (method_exists($this, "onBeforeSave"))
       {
          $this->onBeforeSave();
@@ -1849,6 +1879,11 @@ abstract class ORM
          $this->onBeforeUpdate();
       }
 
+      if (!isset($this->orm['writer']) || empty($this->orm['writer']))
+      {
+         throw new ORMException("Could not perform an update operation because there was no QueryBuilder writer set.");
+      }
+      
       $primaryKeyField = $this->ormGetPrimaryKeyField();
       $primaryKeyValue = $this->ormGetPrimaryKeyValue();
 
@@ -1880,10 +1915,16 @@ abstract class ORM
    // Start the data loading process.  Build and execute SQL query / queries based on the object maps
    // and relationships defined in the ORM object. This is pretty complex stuff.
    //
+   // @throws ORMException
    // @return (array)  Returns an array of ORM objects constructed from the SQL resultset. 
    private function ormLoad($type=ORM_THIS_OBJECT, $expectedRows=1, $conditions, $order=NULL, $limit=NULL)
    {
       $hasMany = 0;
+      
+      if (!isset($this->orm['reader']) || empty($this->orm['reader']))
+      {
+         throw new ORMException("Could not perform a load operation because there was no QueryBuilder reader set.");
+      }
       
       // Call the beforeload callback in the current instance.  Make sure your callback defines the
       // function arguments to be passed BY REFERENCE so you can modify them as needed!
@@ -2072,7 +2113,27 @@ abstract class ORM
    {
       $objects = array();
       $index = array();
-      
+
+      // Reset any has-many properties in the ORM data array.  This ensures the load operation is
+      // completely idempotent.  If not, you'd wind up doubling each has many property in the data
+      // array each time you loaded, or reloaded.
+      //
+      // NOTE: We don't care about new objects.  We'd create new objects each time anyway, so this
+      // doesn't matter.
+      //
+      if ($type == ORM_THIS_OBJECT)
+      {
+         foreach ($this->orm['relations'] as $class => $detail)
+         {
+            $shortClass = $this->getShortClassName($class);
+   
+            if ($detail['type'] == ORM_HAS_MANY)
+            {
+               $this->orm['data'][$shortClass] = [];  
+            }
+         }         
+      }
+
       // Hold any objects that need to load nested relations.  We'll do this after we get all the
       // results for load or find operation.  We have to wait because if we execute another query
       // before we fetch all the data from the previous query, the mysql client will free up the
@@ -2178,8 +2239,11 @@ abstract class ORM
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
+
+            // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-            $this->setForeignKeyValue($detail, $objRef);
+
+            // See if we need to load relations.  If so, add this related object to the queue.
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
@@ -2189,6 +2253,7 @@ abstract class ORM
             {
                $objRef->disableNestedRelations();
             }
+
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2201,9 +2266,14 @@ abstract class ORM
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
+
+            // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
-            $this->setForeignKeyValue($detail, $objRef);
+
+            // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
+            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;
+
+            // See if we need to load relations.  If so, add this related object to the queue.
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
@@ -2213,6 +2283,7 @@ abstract class ORM
             {
                $objRef->disableNestedRelations();
             }
+
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2225,9 +2296,14 @@ abstract class ORM
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
+
+            // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;            
-            $this->setForeignKeyValue($detail, $objRef);
+
+            // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
+            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;
+            
+            // See if we need to load relations.  If so, add this related object to the queue.
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
@@ -2237,6 +2313,7 @@ abstract class ORM
             {
                $objRef->disableNestedRelations();
             }
+
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2289,15 +2366,18 @@ abstract class ORM
       foreach ($newObj->orm['relations'] as $class => $detail)
       {
          $shortClass = $this->getShortClassName($class);
-         
+
          if ($detail['type'] == ORM_HAS_ONE || $detail['type'] == ORM_BELONGS_TO || $detail['type'] == ORM_MIGHT_HAVE_ONE)
          {
             $objRef = new $class;
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
+
+            // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-            $newObj->setForeignKeyValue($detail, $objRef);
+
+            // See if we need to load relations.  If so, add this related object to the queue.
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
@@ -2307,6 +2387,7 @@ abstract class ORM
             {
                $objRef->disableNestedRelations();
             }
+
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if ($numFields > 0) $newObj->{$shortClass} = $objRef;
@@ -2319,7 +2400,11 @@ abstract class ORM
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
+
+            // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
+
+            // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
             if ($numFields > 0)
             {
                // We need to get a reference, modify it, then re-set it.
@@ -2327,7 +2412,8 @@ abstract class ORM
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
             }
-            $newObj->setForeignKeyValue($detail, $objRef);
+
+            // See if we need to load relations.  If so, add this related object to the queue.
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
@@ -2337,6 +2423,7 @@ abstract class ORM
             {
                $objRef->disableNestedRelations();
             }
+
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2349,7 +2436,11 @@ abstract class ORM
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
+
+            // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);            
+
+            // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
             if ($numFields > 0)
             {
                // We need to get a reference, modify it, then re-set it.
@@ -2357,7 +2448,8 @@ abstract class ORM
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
             }
-            $newObj->setForeignKeyValue($detail, $objRef);
+
+            // See if we need to load relations.  If so, add this related object to the queue.
             if ($this->orm['loadRelations'])
             {
                $objRef->enableNestedRelations();
@@ -2367,6 +2459,7 @@ abstract class ORM
             {
                $objRef->disableNestedRelations();
             }
+
             $objRef->orm['dbSync'] = true;
             $objRef->orm['isDirty'] = false;
             if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
@@ -2414,7 +2507,6 @@ abstract class ORM
       {
          $this->orm['queryQueue'][$position]['conditions'] = array_merge($this->orm['queryQueue'][$position]['conditions'], $conditions);                  
       }
-
    }
 
 
@@ -2422,17 +2514,21 @@ abstract class ORM
    // Add an additional query to the db query queue.  Pass in the normal arguments required for the doSelect() method...
    private function additionalQuery($tables, $fields, $conditions, $order, $limit)
    {
-         $newQueue['tables'] = $tables;
-         $newQueue['fields'] = $fields;
-         $newQueue['conditions'] = $conditions;
-         $newQueue['order'] = null;
-         $newQueue['limit'] = null;
-         array_push($this->orm['queryQueue'], $newQueue);
+      $newQueue['tables'] = $tables;
+      $newQueue['fields'] = $fields;
+      $newQueue['conditions'] = $conditions;
+      $newQueue['order'] = null;
+      $newQueue['limit'] = null;
+      array_push($this->orm['queryQueue'], $newQueue);
    }
 
 
    // This is part of ormLoad()
-   // Populate the object variables with database values.  Return the number of fields populated.
+   // Populate the object variables with database values. This will return a positive int if we had
+   // any data to populate in the referenced object.  If we did not populate any fields, we will
+   // return a value of 0.
+   //
+   // @return int Returns the number of fields populated. 
    private function ormPopulateFields($resultset, $shortClassName, $objRef)
    {
       $numFields = 0;
@@ -2443,10 +2539,19 @@ abstract class ORM
              
          if ($resClass == $shortClassName)
          {
-            //$objRef->ormSet($resParam, $value);
             $objRef->orm['data'][$resParam] = $value;
             $numFields++;
          }
+      }
+
+      // If we did not have a valid primary key set on the related object, we consider this a completely
+      // failed attempt, so return 0 to signify no fields populated.
+      //
+      // NOTE: We must explicitly check for null, sice we could have a primary key of int 0.
+      //
+      if ($objRef->ormGetPrimaryKeyValue() == null)
+      {
+         return 0;
       }
 
       $objRef->orm['dbSync'] = true;

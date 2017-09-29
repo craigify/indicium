@@ -354,7 +354,7 @@ abstract class QueryBuilder
       $fields = substr($fields, 0, -2);
       $values = substr($values, 0, -2);
 
-      $query = "INSERT INTO {$table} ({$fields}) VALUES ({$values})";
+      $query = "INSERT INTO {$table} ({$fields}) VALUES ({$values})";      
       $res = $this->query($query);
 
    return $res;
@@ -618,23 +618,44 @@ abstract class QueryBuilder
    public function convertValueToSQL($input)
    {
       /* Quote input depending on type */
-      if     (is_string($input))      $output = "'" . $this->e($input) . "'";
-      elseif (is_int($input))         $output = "'" . $this->e($input) . "'";
-      elseif (is_float($input))       $output = "'" . $this->e($input) . "'";
-      elseif ($input == "")           $output = "''";
-      elseif ($input === TRUE)        $output = "TRUE";
-      elseif ($input === FALSE)       $output = "FALSE";
-      elseif (is_null($input))        $output = "NULL";
-      elseif  (stristr($field, "("))   $values .= "$value, ";
+      if ($input === true)
+         $output = "TRUE";
+      
+      else if ($input === false)
+         $output = "FALSE";
+      
+      else if ($input === null)
+         $output = "NULL";
+      
+      else if (strtoupper($input) == "TRUE")
+         $output = "TRUE";
+      
+      else if (strtoupper($input) == "FALSE")
+         $output = "FALSE";
+      
+      else if (strtoupper($input) == "NULL")
+         $output = "NULL";
 
-      /* In case the following were passed as strings, make sure they are not quoted. */
-      elseif (strtoupper($input) == "TRUE")   $output = "TRUE";
-      elseif (strtoupper($input) == "FALSE")  $output = "FALSE";
-      elseif (strtoupper($input) == "NULL")   $output = "NULL";
+      else if ($input === "")
+         $output = "''";
+      
+      // This matches SQL functions COUNT(), AVG(), etc...
+      // This sucks.  Fix it.
+      //else if (stristr($input, "(") && stristr($input, ")"))
+      //   $output = $this->e($input);
+      
+      else if (is_string($input))
+         $output = "'" . $this->e($input) . "'";
+      
+      else if (is_int($input))
+         $output = "'" . $this->e($input) . "'";
+      
+      else if (is_float($input))
+         $output = "'" . $this->e($input) . "'";
 
       /* Just in case we ever get here, just return input. Not very useful, but last resort */
       else $output = $input;
-
+      
    return $output;
    }
 
