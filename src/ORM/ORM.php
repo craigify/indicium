@@ -1173,8 +1173,18 @@ abstract class ORM
       if ($this->isSynched())
       {
          $primaryKeyValue = $this->ormGetPrimaryKeyValue();
-         if (empty($primaryKeyField) || empty($foreignKeyField)) throw new ORMException("ormSetRelationFields(): Not passed in a properly formated relationKey: '{$relationKey}'");
-         if (empty($primaryKeyValue)) throw new ORMException("ormSetRelationFields(): The primary object is synched, but has no primary key.");         
+   
+         if (empty($primaryKeyField) || empty($foreignKeyField))
+         {
+            $className = get_class($this);
+            throw new ORMException("ormSetRelationFields(): {$className}: Was not passed in a properly formated relationKey: '{$relationKey}'");
+         }
+         
+         if (empty($primaryKeyValue))
+         {
+         	$className = get_class($this);
+            throw new ORMException("ormSetRelationFields(): {$className} is synched, but has no primary key value set (is empty).");
+         }
       }
       else
       {
@@ -2235,29 +2245,36 @@ abstract class ORM
 
          if ($detail['type'] == ORM_HAS_ONE || $detail['type'] == ORM_BELONGS_TO || $detail['type'] == ORM_MIGHT_HAVE_ONE)
          {
-            $objRef = $this->{$shortClass};
+            $objRef = new $class;
+            //$objRef = $this->{$shortClass};
             $objRef->setQueryBuilderReader($this->getReader());
             $objRef->setQueryBuilderWriter($this->getWriter());
             if (method_exists($objRef, "onBeforeLoad")) { if ($objRef->onBeforeLoad($type) === false) continue; }
 
             // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
-
-            // See if we need to load relations.  If so, add this related object to the queue.
-            if ($this->orm['loadRelations'])
+                        
+            // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
+            if ($numFields > 0)
             {
-               $objRef->enableNestedRelations();
-               $this->orm['objectsWaitingForRelations'][] = $objRef;
-            }
-            else
-            {
-               $objRef->disableNestedRelations();
-            }
+               $this->orm['data'][$shortClass] = $objRef;
 
-            $objRef->orm['dbSync'] = true;
-            $objRef->orm['isDirty'] = false;
-            if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
-            unset($objRef);
+               // See if we need to load relations.  If so, add this related object to the queue.
+               if ($this->orm['loadRelations'])
+               {
+                  $objRef->enableNestedRelations();
+                  $this->orm['objectsWaitingForRelations'][] = $objRef;
+               }
+               else
+               {
+                  $objRef->disableNestedRelations();
+               }
+
+               $objRef->orm['dbSync'] = true;
+               $objRef->orm['isDirty'] = false;
+               if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+               //unset($objRef);
+            }
          }
 
          if ($detail['type'] == ORM_HAS_MANY)
@@ -2271,23 +2288,26 @@ abstract class ORM
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
 
             // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
-            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;
-
-            // See if we need to load relations.  If so, add this related object to the queue.
-            if ($this->orm['loadRelations'])
+            if ($numFields > 0)
             {
-               $objRef->enableNestedRelations();
-               $this->orm['objectsWaitingForRelations'][] = $objRef;
-            }
-            else
-            {
-               $objRef->disableNestedRelations();
-            }
+               $this->orm['data'][$shortClass][] = $objRef;
 
-            $objRef->orm['dbSync'] = true;
-            $objRef->orm['isDirty'] = false;
-            if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
-            unset($objRef);
+               // See if we need to load relations.  If so, add this related object to the queue.
+               if ($this->orm['loadRelations'])
+               {
+                  $objRef->enableNestedRelations();
+                  $this->orm['objectsWaitingForRelations'][] = $objRef;
+               }
+               else
+               {
+                  $objRef->disableNestedRelations();
+               }
+
+               $objRef->orm['dbSync'] = true;
+               $objRef->orm['isDirty'] = false;
+               if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+               unset($objRef);
+            }
          }
 
          if ($detail['type'] == ORM_MANY_TO_MANY)
@@ -2301,23 +2321,26 @@ abstract class ORM
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
 
             // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
-            if ($numFields > 0) $this->orm['data'][$shortClass][] = $objRef;
-            
-            // See if we need to load relations.  If so, add this related object to the queue.
-            if ($this->orm['loadRelations'])
+            if ($numFields > 0)
             {
-               $objRef->enableNestedRelations();
-               $this->orm['objectsWaitingForRelations'][] = $objRef;
-            }
-            else
-            {
-               $objRef->disableNestedRelations();
-            }
+               $this->orm['data'][$shortClass][] = $objRef;
 
-            $objRef->orm['dbSync'] = true;
-            $objRef->orm['isDirty'] = false;
-            if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
-            unset($objRef);
+               // See if we need to load relations.  If so, add this related object to the queue.
+               if ($this->orm['loadRelations'])
+               {
+                  $objRef->enableNestedRelations();
+                  $this->orm['objectsWaitingForRelations'][] = $objRef;
+               }
+               else
+               {
+                  $objRef->disableNestedRelations();
+               }
+
+               $objRef->orm['dbSync'] = true;
+               $objRef->orm['isDirty'] = false;
+               if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+               unset($objRef);
+            }
          }
       }
 
@@ -2341,7 +2364,7 @@ abstract class ORM
       $className = strtolower(get_class($this));
       $shortClassName = $this->getShortClassName($className);
 
-      if (method_exists($newObj, "onBeforeLoad")) { if ($newObj->onBeforeLoad($type) === false) continue; }
+      if (method_exists($newObj, "onBeforeLoad")) { if ($newObj->onBeforeLoad($type) === false) return; }
 
       // Create the new object and populate the object variables with data.  We only do this once.
       if ($newObj == null)
@@ -2377,21 +2400,25 @@ abstract class ORM
             // Attempt to parse the resultset and populate any data for this related object.
             $numFields = $this->ormPopulateFields($resultset, $shortClass, $objRef);
 
-            // See if we need to load relations.  If so, add this related object to the queue.
-            if ($this->orm['loadRelations'])
+            // Add this related object to us only if we actally populated fields on it and it has a valid primary key.
+            if ($numFields > 0)
             {
-               $objRef->enableNestedRelations();
-               $this->orm['objectsWaitingForRelations'][] = $objRef;
-            }
-            else
-            {
-               $objRef->disableNestedRelations();
-            }
+               // See if we need to load relations.  If so, add this related object to the queue.
+               if ($this->orm['loadRelations'])
+               {
+                  $objRef->enableNestedRelations();
+                  $this->orm['objectsWaitingForRelations'][] = $objRef;
+               }
+               else
+               {
+                  $objRef->disableNestedRelations();
+               }
 
-            $objRef->orm['dbSync'] = true;
-            $objRef->orm['isDirty'] = false;
-            if ($numFields > 0) $newObj->{$shortClass} = $objRef;
-            if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+               $objRef->orm['dbSync'] = true;
+               $objRef->orm['isDirty'] = false;
+               $newObj->{$shortClass} = $objRef;
+               if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+            }
          }
 
          if ($detail['type'] == ORM_HAS_MANY)
@@ -2411,23 +2438,23 @@ abstract class ORM
                $ref = $newObj->{$shortClass};
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
-            }
 
-            // See if we need to load relations.  If so, add this related object to the queue.
-            if ($this->orm['loadRelations'])
-            {
-               $objRef->enableNestedRelations();
-               $this->orm['objectsWaitingForRelations'][] = $objRef;
-            }
-            else
-            {
-               $objRef->disableNestedRelations();
-            }
+               // See if we need to load relations.  If so, add this related object to the queue.
+               if ($this->orm['loadRelations'])
+               {
+                  $objRef->enableNestedRelations();
+                  $this->orm['objectsWaitingForRelations'][] = $objRef;
+               }
+               else
+               {
+                  $objRef->disableNestedRelations();
+               }
 
-            $objRef->orm['dbSync'] = true;
-            $objRef->orm['isDirty'] = false;
-            if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
-            unset($objRef);
+               $objRef->orm['dbSync'] = true;
+               $objRef->orm['isDirty'] = false;
+               if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+               unset($objRef);
+            }
          }
 
          if ($detail['type'] == ORM_MANY_TO_MANY)
@@ -2447,23 +2474,23 @@ abstract class ORM
                $ref = $newObj->{$shortClass};
                $ref[] = $objRef;
                $newObj->{$shortClass} = $ref;
-            }
 
-            // See if we need to load relations.  If so, add this related object to the queue.
-            if ($this->orm['loadRelations'])
-            {
-               $objRef->enableNestedRelations();
-               $this->orm['objectsWaitingForRelations'][] = $objRef;
-            }
-            else
-            {
-               $objRef->disableNestedRelations();
-            }
+               // See if we need to load relations.  If so, add this related object to the queue.
+               if ($this->orm['loadRelations'])
+               {
+                  $objRef->enableNestedRelations();
+                  $this->orm['objectsWaitingForRelations'][] = $objRef;
+               }
+               else
+               {
+                  $objRef->disableNestedRelations();
+               }
 
-            $objRef->orm['dbSync'] = true;
-            $objRef->orm['isDirty'] = false;
-            if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
-            unset($objRef);
+               $objRef->orm['dbSync'] = true;
+               $objRef->orm['isDirty'] = false;
+               if (method_exists($objRef, "onAfterLoad")) $objRef->onAfterLoad($type);
+               unset($objRef);
+            }
          }
       }
 
