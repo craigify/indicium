@@ -615,49 +615,48 @@ abstract class QueryBuilder
    * @return output (mixed) Output variable converted to SQL plaintext, and possibly escaped.
    */
 
-   public function convertValueToSQL($input)
-   {
-      /* Quote input depending on type */
-      if ($input === true)
-         $output = "TRUE";
-      
-      else if ($input === false)
-         $output = "FALSE";
-      
-      else if ($input === null)
-         $output = "NULL";
-      
-      else if (strtoupper($input) == "TRUE")
-         $output = "TRUE";
-      
-      else if (strtoupper($input) == "FALSE")
-         $output = "FALSE";
-      
-      else if (strtoupper($input) == "NULL")
-         $output = "NULL";
+  public function convertValueToSQL($input)
+  {
+     /* Quote input depending on type */
+     if ($input === true)
+        $output = "TRUE";
 
-      else if ($input === "")
-         $output = "''";
-      
-      // This matches SQL functions COUNT(), AVG(), etc...
-      // This sucks.  Fix it.
-      //else if (stristr($input, "(") && stristr($input, ")"))
-      //   $output = $this->e($input);
-      
-      else if (is_string($input))
-         $output = "'" . $this->e($input) . "'";
-      
-      else if (is_int($input))
-         $output = "'" . $this->e($input) . "'";
-      
-      else if (is_float($input))
-         $output = "'" . $this->e($input) . "'";
+     else if ($input === false)
+        $output = "FALSE";
 
-      /* Just in case we ever get here, just return input. Not very useful, but last resort */
-      else $output = $input;
-      
-   return $output;
-   }
+     else if ($input === null)
+        $output = "NULL";
+
+     else if (strtoupper($input) == "TRUE")
+        $output = "TRUE";
+
+     else if (strtoupper($input) == "FALSE")
+        $output = "FALSE";
+
+     else if (strtoupper($input) == "NULL")
+        $output = "NULL";
+
+     else if ($input === "")
+        $output = "''";
+
+     // This matches SQL functions COUNT(), AVG(), HEX('string'), etc...
+     else if (is_string($input) && preg_match('/^[A-z0-9-_]+?\(.+?\)$/', $input))
+        $output = $input;
+
+     else if (is_string($input))
+        $output = "'" . $this->e($input) . "'";
+
+     else if (is_int($input))
+        $output = "'" . $this->e($input) . "'";
+
+     else if (is_float($input))
+        $output = "'" . $this->e($input) . "'";
+
+     /* Just in case we ever get here, just return input. Not very useful, but last resort */
+     else $output = $input;
+
+  return $output;
+  }
 
 
    // Register a result returned from a query() statement.
