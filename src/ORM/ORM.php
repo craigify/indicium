@@ -2364,7 +2364,7 @@ abstract class ORM
       $className = strtolower(get_class($this));
       $shortClassName = $this->getShortClassName($className);
 
-      if (method_exists($newObj, "onBeforeLoad")) { if ($newObj->onBeforeLoad($type) === false) return; }
+      if (!empty($newObj) && method_exists($newObj, "onBeforeLoad")) { if ($newObj->onBeforeLoad($type) === false) return; }
 
       // Create the new object and populate the object variables with data.  We only do this once.
       if ($newObj == null)
